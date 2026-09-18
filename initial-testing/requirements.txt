@@ -1,0 +1,5 @@
+av>=14,<17
+numpy>=2,<3
+speechbrain>=1.0,<2
+torch>=2.6,<3
+transformers>=4.49,<6
