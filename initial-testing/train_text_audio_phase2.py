@@ -63,6 +63,11 @@ def checkpoint_score(matched, controls, minimum_margin: float):
     return int(margin >= minimum_margin), margin, matched["macro_f1"]
 
 
+def checkpoint_selection_score(score):
+    eligible, margin, macro_f1 = score
+    return eligible, margin, macro_f1
+
+
 def hard_negative_indices(labels: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
     """Choose the closest-duration clip with another label for every sample."""
     if len(labels) < 2:
@@ -112,6 +117,7 @@ def counterfactual_losses(
         "ranking": ranking,
         "gate_ranking": gate_ranking,
         "negative_residual": negative_residual,
+        "negative_gate": negative["gate"].mean(),
     }
 
 
@@ -402,6 +408,7 @@ def calculate_loss(output, negative_output, labels, class_weights, args):
             "ranking": zero,
             "gate_ranking": zero,
             "negative_residual": zero,
+            "negative_gate": zero,
         }
     else:
         counterfactual = counterfactual_losses(
@@ -419,6 +426,7 @@ def calculate_loss(output, negative_output, labels, class_weights, args):
         + args.counterfactual_weight * counterfactual["ranking"]
         + args.gate_ranking_weight * counterfactual["gate_ranking"]
         + args.negative_residual_weight * counterfactual["negative_residual"]
+        + args.negative_gate_weight * counterfactual["negative_gate"]
     )
     return total, {
         "total": float(total.detach().cpu()),
@@ -431,6 +439,8 @@ def calculate_loss(output, negative_output, labels, class_weights, args):
         "negative_residual": float(
             counterfactual["negative_residual"].detach().cpu()
         ),
+        "matched_gate": float(output["gate"].mean().detach().cpu()),
+        "negative_gate": float(counterfactual["negative_gate"].detach().cpu()),
     }
 
 
@@ -530,7 +540,7 @@ def parse_arguments():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=root / "initial-testing/training-output-text-audio-counterfactual",
+        default=root / "initial-testing/training-output-text-audio-counterfactual-stabilized",
     )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -546,12 +556,13 @@ def parse_arguments():
     parser.add_argument("--initial-gate-bias", type=float, default=-2.0)
     parser.add_argument("--audio-loss-weight", type=float, default=0.3)
     parser.add_argument("--contrastive-weight", type=float, default=0.1)
-    parser.add_argument("--correction-penalty-weight", type=float, default=0.001)
-    parser.add_argument("--counterfactual-weight", type=float, default=0.3)
+    parser.add_argument("--correction-penalty-weight", type=float, default=0.01)
+    parser.add_argument("--counterfactual-weight", type=float, default=1.0)
     parser.add_argument("--counterfactual-margin", type=float, default=0.1)
     parser.add_argument("--gate-ranking-weight", type=float, default=0.1)
     parser.add_argument("--gate-margin", type=float, default=0.03)
-    parser.add_argument("--negative-residual-weight", type=float, default=0.1)
+    parser.add_argument("--negative-residual-weight", type=float, default=0.5)
+    parser.add_argument("--negative-gate-weight", type=float, default=0.2)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--minimum-audio-margin", type=float, default=0.005)
     parser.add_argument("--context-window", type=int, default=3)
@@ -651,7 +662,7 @@ def main():
         score = checkpoint_score(
             matched["fused_metrics"], controls, args.minimum_audio_margin
         )
-        selection_score = (score[0], score[2], score[1])
+        selection_score = checkpoint_selection_score(score)
         row = {
             "epoch": epoch,
             "losses": losses,
@@ -715,6 +726,7 @@ def main():
         "test_matched": test_matched["fused_metrics"],
         "test_zeroed": test_zeroed["fused_metrics"],
         "test_shuffled": [item["fused_metrics"] for item in test_shuffled],
+        "mean_test_shuffled_gates": [item["mean_gate"] for item in test_shuffled],
         "test_worst_case_weighted_margin": test_score[1],
         "passes_audio_evidence_gate": bool(test_score[0]),
         "mean_test_gate": test_matched["mean_gate"],

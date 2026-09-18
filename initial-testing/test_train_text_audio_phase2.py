@@ -51,6 +51,15 @@ class TextAudioPhaseTwoTests(unittest.TestCase):
         self.assertEqual(score[0], 0)
         self.assertAlmostEqual(score[1], -0.001)
 
+    def test_checkpoint_selection_prioritizes_audio_margin_before_macro_f1(self):
+        larger_margin = (0, 0.004, 0.490)
+        larger_macro = (0, 0.003, 0.510)
+
+        self.assertGreater(
+            phase2.checkpoint_selection_score(larger_margin),
+            phase2.checkpoint_selection_score(larger_macro),
+        )
+
     def test_masked_statistics_ignore_padding(self):
         sequence = torch.tensor([[[1.0, 2.0], [3.0, 6.0], [99.0, 99.0]]])
         padding = torch.tensor([[False, False, True]])
@@ -119,6 +128,7 @@ class TextAudioPhaseTwoTests(unittest.TestCase):
         self.assertEqual(float(losses["ranking"]), 0.0)
         self.assertEqual(float(losses["gate_ranking"]), 0.0)
         self.assertGreater(float(losses["negative_residual"]), 0.0)
+        self.assertAlmostEqual(float(losses["negative_gate"]), 0.05)
 
 
 if __name__ == "__main__":
