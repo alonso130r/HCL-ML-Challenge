@@ -63,6 +63,58 @@ def checkpoint_score(matched, controls, minimum_margin: float):
     return int(margin >= minimum_margin), margin, matched["macro_f1"]
 
 
+def hard_negative_indices(labels: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+    """Choose the closest-duration clip with another label for every sample."""
+    if len(labels) < 2:
+        raise ValueError("counterfactual batches need at least two samples")
+    selected = []
+    for index in range(len(labels)):
+        candidates = torch.nonzero(labels != labels[index], as_tuple=False).flatten()
+        if not len(candidates):
+            candidates = torch.cat(
+                (
+                    torch.arange(index, device=labels.device),
+                    torch.arange(index + 1, len(labels), device=labels.device),
+                )
+            )
+        distances = (lengths[candidates] - lengths[index]).abs()
+        selected.append(candidates[distances.argmin()])
+    return torch.stack(selected)
+
+
+def permute_audio(batch, indices: torch.Tensor):
+    result = dict(batch)
+    for key in ("audio_frames", "audio_padding_mask", "acoustic_features"):
+        result[key] = batch[key].index_select(0, indices)
+    return result
+
+
+def counterfactual_losses(
+    matched, negative, labels, prediction_margin: float, gate_margin: float
+):
+    targets = labels.unsqueeze(1)
+    matched_support = torch.log_softmax(matched["logits"], dim=-1).gather(
+        1, targets
+    )
+    negative_support = torch.log_softmax(negative["logits"], dim=-1).gather(
+        1, targets
+    )
+    ranking = torch.relu(
+        prediction_margin - (matched_support - negative_support)
+    ).mean()
+    gate_ranking = torch.relu(
+        gate_margin - (matched["gate"] - negative["gate"])
+    ).mean()
+    negative_residual = (
+        negative["gate"] * negative["correction"]
+    ).square().mean()
+    return {
+        "ranking": ranking,
+        "gate_ranking": gate_ranking,
+        "negative_residual": negative_residual,
+    }
+
+
 def combine_records(rows, context_window: int, audio_cache_dir: Path, split: str):
     examples = build_examples(rows, context_window)
     metadata = []
@@ -258,20 +310,31 @@ class PhaseTwoFusion(torch.nn.Module):
         self.text_contrast = torch.nn.Linear(text_model.config.hidden_size, dimension)
         self.audio_contrast = torch.nn.Linear(dimension, dimension)
 
-    def forward(self, batch, audio_mode="matched"):
-        text_inputs = {
-            key: batch[key]
-            for key in ("input_ids", "attention_mask", "token_type_ids")
-            if key in batch
-        }
-        with torch.no_grad():
-            text_output = self.text_model(
-                **text_inputs, output_hidden_states=True, return_dict=True
+    def forward(
+        self, batch, audio_mode="matched", text_state=None,
+        apply_modality_dropout=True,
+    ):
+        if text_state is None:
+            text_inputs = {
+                key: batch[key]
+                for key in ("input_ids", "attention_mask", "token_type_ids")
+                if key in batch
+            }
+            with torch.no_grad():
+                text_output = self.text_model(
+                    **text_inputs, output_hidden_states=True, return_dict=True
+                )
+            text_logits = text_output.logits
+            token_mask = batch["current_token_mask"].unsqueeze(-1)
+            text_hidden = text_output.hidden_states[-1]
+            token_count = token_mask.sum(dim=1)
+            current_text = (text_hidden * token_mask).sum(dim=1) / token_count.clamp_min(1)
+            current_text = torch.where(
+                token_count.eq(0), text_hidden[:, 0], current_text
             )
-        text_logits = text_output.logits
-        token_mask = batch["current_token_mask"].unsqueeze(-1)
-        text_hidden = text_output.hidden_states[-1]
-        current_text = (text_hidden * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp_min(1)
+            text_state = (text_logits, current_text)
+        else:
+            text_logits, current_text = text_state
         frames = self.audio_projection(batch["audio_frames"])
         frames = frames + self.position[:, : frames.shape[1]]
         frames = self.temporal_encoder(
@@ -303,7 +366,7 @@ class PhaseTwoFusion(torch.nn.Module):
             gate = torch.zeros_like(gate)
         elif audio_mode != "matched":
             raise ValueError(f"unknown audio mode: {audio_mode}")
-        if self.training and self.modality_dropout > 0:
+        if self.training and apply_modality_dropout and self.modality_dropout > 0:
             keep = torch.rand_like(gate).ge(self.modality_dropout).to(gate.dtype)
             gate = gate * keep
         return {
@@ -314,6 +377,7 @@ class PhaseTwoFusion(torch.nn.Module):
             "correction": correction,
             "text_embedding": self.text_contrast(current_text),
             "audio_embedding": self.audio_contrast(audio_embedding),
+            "text_state": text_state,
         }
 
 
@@ -321,7 +385,7 @@ def move_batch(batch, device):
     return {key: value.to(device) for key, value in batch.items()}
 
 
-def calculate_loss(output, labels, class_weights, args):
+def calculate_loss(output, negative_output, labels, class_weights, args):
     fused = torch.nn.functional.cross_entropy(
         output["logits"], labels, weight=class_weights
     )
@@ -332,11 +396,29 @@ def calculate_loss(output, labels, class_weights, args):
         output["text_embedding"], output["audio_embedding"], args.temperature
     )
     correction = output["correction"].square().mean()
+    if negative_output is None:
+        zero = fused.new_zeros(())
+        counterfactual = {
+            "ranking": zero,
+            "gate_ranking": zero,
+            "negative_residual": zero,
+        }
+    else:
+        counterfactual = counterfactual_losses(
+            output,
+            negative_output,
+            labels,
+            args.counterfactual_margin,
+            args.gate_margin,
+        )
     total = (
         fused
         + args.audio_loss_weight * audio
         + args.contrastive_weight * contrastive
         + args.correction_penalty_weight * correction
+        + args.counterfactual_weight * counterfactual["ranking"]
+        + args.gate_ranking_weight * counterfactual["gate_ranking"]
+        + args.negative_residual_weight * counterfactual["negative_residual"]
     )
     return total, {
         "total": float(total.detach().cpu()),
@@ -344,6 +426,11 @@ def calculate_loss(output, labels, class_weights, args):
         "audio": float(audio.detach().cpu()),
         "contrastive": float(contrastive.detach().cpu()),
         "correction": float(correction.detach().cpu()),
+        "counterfactual": float(counterfactual["ranking"].detach().cpu()),
+        "gate_ranking": float(counterfactual["gate_ranking"].detach().cpu()),
+        "negative_residual": float(
+            counterfactual["negative_residual"].detach().cpu()
+        ),
     }
 
 
@@ -354,8 +441,20 @@ def train_epoch(model, loader, optimizer, class_weights, args, device):
     losses = []
     for step, batch in enumerate(loader, start=1):
         batch = move_batch(batch, device)
-        output = model(batch)
-        loss, components = calculate_loss(output, batch["labels"], class_weights, args)
+        output = model(batch, apply_modality_dropout=False)
+        negative_output = None
+        if len(batch["labels"]) > 1:
+            lengths = (~batch["audio_padding_mask"]).sum(dim=1)
+            negative_indices = hard_negative_indices(batch["labels"], lengths)
+            negative_batch = permute_audio(batch, negative_indices)
+            negative_output = model(
+                negative_batch,
+                text_state=output["text_state"],
+                apply_modality_dropout=False,
+            )
+        loss, components = calculate_loss(
+            output, negative_output, batch["labels"], class_weights, args
+        )
         (loss / args.gradient_accumulation).backward()
         losses.append(components)
         if step % args.gradient_accumulation == 0 or step == len(loader):
@@ -428,7 +527,11 @@ def parse_arguments():
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
     parser.add_argument("--text-model", type=Path, default=root / "initial-testing/training-output-text/best-model")
     parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-text-audio-phase2")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=root / "initial-testing/training-output-text-audio-counterfactual",
+    )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--gradient-accumulation", type=int, default=4)
@@ -439,11 +542,16 @@ def parse_arguments():
     parser.add_argument("--temporal-layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--modality-dropout", type=float, default=0.2)
-    parser.add_argument("--max-gate", type=float, default=0.5)
+    parser.add_argument("--max-gate", type=float, default=0.25)
     parser.add_argument("--initial-gate-bias", type=float, default=-2.0)
     parser.add_argument("--audio-loss-weight", type=float, default=0.3)
     parser.add_argument("--contrastive-weight", type=float, default=0.1)
     parser.add_argument("--correction-penalty-weight", type=float, default=0.001)
+    parser.add_argument("--counterfactual-weight", type=float, default=0.3)
+    parser.add_argument("--counterfactual-margin", type=float, default=0.1)
+    parser.add_argument("--gate-ranking-weight", type=float, default=0.1)
+    parser.add_argument("--gate-margin", type=float, default=0.03)
+    parser.add_argument("--negative-residual-weight", type=float, default=0.1)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--minimum-audio-margin", type=float, default=0.005)
     parser.add_argument("--context-window", type=int, default=3)
