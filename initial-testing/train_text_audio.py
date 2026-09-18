@@ -37,6 +37,26 @@ def masked_mean(sequence: torch.Tensor, padding_mask: torch.Tensor) -> torch.Ten
     return (sequence * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
 
 
+def disable_layerdrop(model: torch.nn.Module) -> None:
+    """Keep hidden-state layer indices stable while fine-tuning WavLM."""
+    for module in model.modules():
+        config = getattr(module, "config", None)
+        if config is not None and hasattr(config, "layerdrop"):
+            config.layerdrop = 0.0
+
+
+def disable_pretraining_masking(model: torch.nn.Module) -> None:
+    """Disable WavLM SpecAugment, which is unsafe for very short MELD clips."""
+    for module in model.modules():
+        config = getattr(module, "config", None)
+        if config is None:
+            continue
+        if hasattr(config, "mask_time_prob"):
+            config.mask_time_prob = 0.0
+        if hasattr(config, "mask_feature_prob"):
+            config.mask_feature_prob = 0.0
+
+
 class LearnedLayerMixture(torch.nn.Module):
     def __init__(self, layer_indices: tuple[int, ...]):
         super().__init__()
@@ -487,8 +507,10 @@ def parse_arguments():
 
 
 def validate_arguments(args):
-    if args.head_epochs < 1 or args.finetune_epochs < 0:
-        raise ValueError("head epochs must be positive and finetune epochs nonnegative")
+    if args.head_epochs < 0 or args.finetune_epochs < 0:
+        raise ValueError("head and finetune epochs must be nonnegative")
+    if args.head_epochs + args.finetune_epochs < 1:
+        raise ValueError("at least one training epoch is required")
     if args.fusion_dimension % args.attention_heads:
         raise ValueError("fusion dimension must be divisible by attention heads")
     if min(args.batch_size, args.gradient_accumulation, args.patience) < 1:
@@ -509,6 +531,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.text_model)
     text_model = AutoModelForSequenceClassification.from_pretrained(args.text_model)
     audio_model = AutoModel.from_pretrained(AUDIO_MODEL)
+    disable_layerdrop(audio_model)
+    disable_pretraining_masking(audio_model)
     for parameter in text_model.parameters():
         parameter.requires_grad = False
     unfreeze_top_layers(audio_model, 0)
@@ -543,6 +567,10 @@ def main():
     ).to(device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = args.output_dir / "best_text_audio.pt"
+    if args.head_epochs == 0 and not checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"cannot skip head training without an existing checkpoint: {checkpoint_path}"
+        )
     baseline = evaluate(model, loaders["dev"], device)["text_metrics"]
     print(
         f"Device: {device}; samples: {len(records['train'])}; "

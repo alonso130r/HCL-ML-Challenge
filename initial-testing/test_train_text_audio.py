@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import numpy as np
@@ -15,6 +16,32 @@ SPEC.loader.exec_module(train_text_audio)
 
 
 class TextAudioFusionTests(unittest.TestCase):
+    def test_disable_layerdrop_updates_model_and_encoder_configs(self):
+        model = torch.nn.Module()
+        model.config = SimpleNamespace(layerdrop=0.1)
+        model.encoder = torch.nn.Module()
+        model.encoder.config = SimpleNamespace(layerdrop=0.1)
+
+        train_text_audio.disable_layerdrop(model)
+
+        self.assertEqual(model.config.layerdrop, 0.0)
+        self.assertEqual(model.encoder.config.layerdrop, 0.0)
+
+    def test_disable_pretraining_masking_handles_all_model_configs(self):
+        model = torch.nn.Module()
+        model.config = SimpleNamespace(mask_time_prob=0.05, mask_feature_prob=0.1)
+        model.encoder = torch.nn.Module()
+        model.encoder.config = SimpleNamespace(
+            mask_time_prob=0.05, mask_feature_prob=0.1
+        )
+
+        train_text_audio.disable_pretraining_masking(model)
+
+        self.assertEqual(model.config.mask_time_prob, 0.0)
+        self.assertEqual(model.config.mask_feature_prob, 0.0)
+        self.assertEqual(model.encoder.config.mask_time_prob, 0.0)
+        self.assertEqual(model.encoder.config.mask_feature_prob, 0.0)
+
     def test_sanitize_acoustic_features_accepts_read_only_arrays(self):
         values = np.array([1.0, np.nan, np.inf], dtype=np.float32)
         values.setflags(write=False)
