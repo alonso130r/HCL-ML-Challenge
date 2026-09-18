@@ -1,5 +1,9 @@
 av>=14,<17
 numpy>=2,<3
+opensmile>=2.5,<3
+opencv-python-headless>=4.10,<5
+pillow>=10,<13
 speechbrain>=1.0,<2
 torch>=2.6,<3
+torchvision>=0.21,<1
 transformers>=4.49,<6

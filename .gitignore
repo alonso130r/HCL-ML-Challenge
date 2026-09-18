@@ -14,6 +14,7 @@ __pycache__/
 # Generated evaluation, cache, and training artifacts
 /initial-testing/cache/
 /initial-testing/audio-cache/
+/initial-testing/video-cache/
 /initial-testing/results/
 /initial-testing/training-output*/
 /initial-testing/checkpoints/
@@ -24,6 +25,7 @@ __pycache__/
 *.safetensors
 
 # Experiment logs and temporary files
+/docs/
 /tmp/
 /spec/
 /wandb/

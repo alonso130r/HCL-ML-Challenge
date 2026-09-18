@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fine-tune the SpeechBrain IEMOCAP encoder for seven-class MELD emotion."""
+"""Fine-tune WavLM Base Plus for seven-class MELD emotion recognition."""
 
 from __future__ import annotations
 
@@ -16,9 +16,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from cache_embeddings import AUDIO_MODEL, decode_clip, load_split_rows, media_key
+from cache_embeddings import decode_clip, load_split_rows, media_key
 from evaluate_meld import EMOTION_LABELS, compute_metrics, select_device
 from train_text import sqrt_class_weights
+
+
+AUDIO_MODEL = "microsoft/wavlm-base-plus"
 
 
 def pad_audio(waveforms: list[np.ndarray]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -144,31 +147,81 @@ def make_loader(records, batch_size, shuffle, seed):
     )
 
 
-class MeldAudioClassifier(torch.nn.Module):
-    def __init__(self, pretrained, dropout=0.2):
+def frame_padding_mask(lengths: torch.Tensor, frame_count: int) -> torch.Tensor:
+    valid = torch.ceil(lengths * frame_count).long().clamp(min=1, max=frame_count)
+    positions = torch.arange(frame_count, device=lengths.device).unsqueeze(0)
+    return positions >= valid.unsqueeze(1)
+
+
+class AttentiveStatisticsPooling(torch.nn.Module):
+    def __init__(self, dimension: int):
         super().__init__()
-        self.wav2vec2 = pretrained.mods.wav2vec2
-        self.pool = pretrained.mods.avg_pool
-        self.dropout = torch.nn.Dropout(dropout)
-        self.classifier = torch.nn.Linear(768, len(EMOTION_LABELS))
+        self.attention = torch.nn.Linear(dimension, 1)
+
+    def forward(self, hidden, padding_mask):
+        scores = self.attention(hidden).squeeze(-1)
+        scores = scores.masked_fill(padding_mask, torch.finfo(scores.dtype).min)
+        weights = torch.softmax(scores, dim=1).unsqueeze(-1)
+        mean = (hidden * weights).sum(dim=1)
+        variance = (((hidden - mean.unsqueeze(1)) ** 2) * weights).sum(dim=1)
+        return torch.cat((mean, variance.clamp_min(1e-8).sqrt()), dim=-1)
+
+
+class WavLmEncoder(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.freeze = True
 
     def forward(self, waveforms, lengths):
-        hidden = self.wav2vec2(waveforms)
-        pooled = self.pool(hidden, lengths).reshape(hidden.shape[0], -1)
-        return self.classifier(self.dropout(pooled))
+        sample_count = waveforms.shape[1]
+        padding_mask = frame_padding_mask(lengths, sample_count)
+        attention_mask = (~padding_mask).long()
+
+        def encode():
+            return self.model(
+                input_values=waveforms,
+                attention_mask=attention_mask,
+            ).last_hidden_state
+
+        if self.freeze:
+            with torch.no_grad():
+                return encode()
+        return encode()
+
+
+class MeldAudioClassifier(torch.nn.Module):
+    def __init__(self, audio_encoder, dropout=0.2):
+        super().__init__()
+        self.audio_encoder = audio_encoder
+        self.pool = AttentiveStatisticsPooling(768)
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(1536, 256),
+            torch.nn.GELU(),
+            torch.nn.Dropout(dropout),
+            torch.nn.Linear(256, len(EMOTION_LABELS)),
+        )
+
+    def forward(self, waveforms, lengths):
+        hidden = self.audio_encoder(waveforms, lengths)
+        padding_mask = frame_padding_mask(lengths, hidden.shape[1])
+        pooled = self.pool(hidden, padding_mask)
+        return self.classifier(pooled)
+
+    def head_parameters(self):
+        encoder_parameters = {id(parameter) for parameter in self.audio_encoder.parameters()}
+        return [
+            parameter for parameter in self.parameters()
+            if id(parameter) not in encoder_parameters
+        ]
 
 
 def load_model(device, dropout):
-    from speechbrain.inference.interfaces import foreign_class
+    from transformers import AutoModel
 
-    pretrained = foreign_class(
-        source=AUDIO_MODEL,
-        pymodule_file="custom_interface.py",
-        classname="CustomEncoderWav2vec2Classifier",
-        run_opts={"device": str(device)},
-    )
-    model = MeldAudioClassifier(pretrained, dropout).to(device)
-    unfreeze_top_layers(model.wav2vec2.model, 0)
+    audio_encoder = WavLmEncoder(AutoModel.from_pretrained(AUDIO_MODEL))
+    model = MeldAudioClassifier(audio_encoder, dropout).to(device)
+    unfreeze_top_layers(model.audio_encoder.model, 0)
     return model
 
 
@@ -196,7 +249,7 @@ def train_epoch(
 ):
     model.train()
     if not train_encoder:
-        model.wav2vec2.eval()
+        model.audio_encoder.eval()
     optimizer.zero_grad(set_to_none=True)
     losses = []
     for step, (waveforms, lengths, labels, _) in enumerate(loader, start=1):
@@ -235,17 +288,22 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
     parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-audio")
-    parser.add_argument("--head-epochs", type=int, default=2)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=root / "initial-testing/training-output-audio-wavlm",
+    )
+    parser.add_argument("--head-epochs", type=int, default=3)
     parser.add_argument("--finetune-epochs", type=int, default=4)
-    parser.add_argument("--unfreeze-layers", type=int, default=2)
+    parser.add_argument("--unfreeze-layers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--gradient-accumulation", type=int, default=8)
     parser.add_argument("--head-learning-rate", type=float, default=1e-4)
-    parser.add_argument("--encoder-learning-rate", type=float, default=1e-5)
+    parser.add_argument("--encoder-learning-rate", type=float, default=2e-6)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--patience", type=int, default=2)
+    parser.add_argument("--minimum-head-macro-f1", type=float, default=0.22)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-samples-per-split", type=int)
     parser.add_argument("--rebuild-audio-cache", action="store_true")
@@ -287,19 +345,31 @@ def main():
     for phase, phase_epochs in phases:
         if phase_epochs == 0 or stop:
             continue
+        if phase == "finetune" and best_f1 < args.minimum_head_macro_f1:
+            print(
+                f"Skipping finetune phase: best frozen-head macro F1 "
+                f"{best_f1:.4f} is below {args.minimum_head_macro_f1:.4f}"
+            )
+            break
         stale = 0
         if phase == "head":
             optimizer = torch.optim.AdamW(
-                model.classifier.parameters(), lr=args.head_learning_rate,
+                model.head_parameters(), lr=args.head_learning_rate,
                 weight_decay=args.weight_decay,
             )
         else:
-            unfreeze_top_layers(model.wav2vec2.model, args.unfreeze_layers)
-            model.wav2vec2.freeze = False
-            encoder_parameters = [p for p in model.wav2vec2.parameters() if p.requires_grad]
+            if checkpoint_path.exists():
+                model.load_state_dict(
+                    torch.load(checkpoint_path, map_location=device, weights_only=True)
+                )
+            unfreeze_top_layers(model.audio_encoder.model, args.unfreeze_layers)
+            model.audio_encoder.freeze = False
+            encoder_parameters = [
+                p for p in model.audio_encoder.parameters() if p.requires_grad
+            ]
             optimizer = torch.optim.AdamW(
                 [
-                    {"params": model.classifier.parameters(), "lr": args.head_learning_rate},
+                    {"params": model.head_parameters(), "lr": args.head_learning_rate},
                     {"params": encoder_parameters, "lr": args.encoder_learning_rate},
                 ],
                 weight_decay=args.weight_decay,
@@ -346,6 +416,11 @@ def main():
             "output_dir": str(args.output_dir),
         },
         "audio_model": AUDIO_MODEL,
+        "audio_head": {
+            "input_dimension": 768,
+            "hidden_dimension": 256,
+            "pooling": "masked_attentive_mean_and_standard_deviation",
+        },
         "best_epoch": best_epoch,
         "best_dev_macro_f1": best_f1,
         "final_dev_metrics": dev_metrics,

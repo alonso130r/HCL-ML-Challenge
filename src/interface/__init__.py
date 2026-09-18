@@ -1,0 +1,2 @@
+"""Local streaming demo interface."""
+
