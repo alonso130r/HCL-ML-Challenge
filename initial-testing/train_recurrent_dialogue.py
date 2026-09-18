@@ -59,6 +59,21 @@ def different_label_audio_mapping(records, seed):
     return mapping
 
 
+def locked_dropout_mask(reference, probability, training):
+    if not training or probability <= 0:
+        return torch.ones_like(reference)
+    if probability >= 1:
+        raise ValueError("locked dropout probability must be below one")
+    keep = torch.rand_like(reference).ge(probability).to(reference.dtype)
+    return keep / (1.0 - probability)
+
+
+def gate_ceiling_penalty(output, mask, context_ceiling, audio_ceiling):
+    context_excess = torch.relu(output["context_gate"][mask] - context_ceiling)
+    audio_excess = torch.relu(output["audio_gate"][mask] - audio_ceiling)
+    return (context_excess.square() + audio_excess.square()).mean()
+
+
 def current_token_mask(encoded, offsets, texts):
     starts = torch.tensor(
         [text.rfind("Current:\n") + len("Current:\n") for text in texts]
@@ -218,6 +233,15 @@ class RecurrentDialogueModel(torch.nn.Module):
         self.speaker_dimension = args.speaker_state_dimension
         self.context_max_gate = args.context_max_gate
         self.audio_max_gate = args.audio_max_gate
+        self.dialogue_state_dropout = getattr(args, "dialogue_state_dropout", 0.0)
+        self.speaker_state_dropout = getattr(args, "speaker_state_dropout", 0.0)
+        self.audio_dropout = getattr(args, "audio_dropout", 0.0)
+        self.dialogue_reset_probability = getattr(
+            args, "dialogue_reset_probability", 0.0
+        )
+        self.speaker_reset_probability = getattr(
+            args, "speaker_reset_probability", 0.0
+        )
         self.text_projection = torch.nn.Sequential(
             torch.nn.Linear(text_dimension, args.text_projection_dimension),
             torch.nn.LayerNorm(args.text_projection_dimension),
@@ -239,6 +263,8 @@ class RecurrentDialogueModel(torch.nn.Module):
         self.speaker_cell = torch.nn.GRUCell(
             current_dimension + self.dialogue_dimension, self.speaker_dimension
         )
+        self.dialogue_norm = torch.nn.LayerNorm(self.dialogue_dimension)
+        self.speaker_norm = torch.nn.LayerNorm(self.speaker_dimension)
         context_input = (
             args.text_projection_dimension
             + self.dialogue_dimension
@@ -274,7 +300,15 @@ class RecurrentDialogueModel(torch.nn.Module):
 
     def forward(self, batch, reset_each_turn=False, zero_audio=False):
         text = self.text_projection(batch["text_embeddings"])
-        audio = self.audio_projection(batch["audio_features"])
+        audio_input = batch["audio_features"]
+        if self.training and self.audio_dropout > 0:
+            keep_audio = torch.rand(
+                *audio_input.shape[:2], 1,
+                device=audio_input.device,
+                dtype=audio_input.dtype,
+            ).ge(self.audio_dropout)
+            audio_input = audio_input * keep_audio
+        audio = self.audio_projection(audio_input)
         if zero_audio:
             audio = torch.zeros_like(audio)
         batch_size, turns, _ = text.shape
@@ -282,6 +316,12 @@ class RecurrentDialogueModel(torch.nn.Module):
         dialogue_state = text.new_zeros(batch_size, self.dialogue_dimension)
         speaker_states = text.new_zeros(
             batch_size, speaker_count, self.speaker_dimension
+        )
+        dialogue_dropout = locked_dropout_mask(
+            dialogue_state, self.dialogue_state_dropout, self.training
+        )
+        speaker_dropout = locked_dropout_mask(
+            speaker_states[:, 0], self.speaker_state_dropout, self.training
         )
         logits, audio_logits = [], []
         context_gates, audio_gates = [], []
@@ -291,20 +331,42 @@ class RecurrentDialogueModel(torch.nn.Module):
             if reset_each_turn:
                 dialogue_state = torch.zeros_like(dialogue_state)
                 speaker_states = torch.zeros_like(speaker_states)
+            elif self.training and turn > 0:
+                reset_dialogue = torch.rand(
+                    batch_size, 1, device=text.device
+                ).lt(self.dialogue_reset_probability)
+                dialogue_state = torch.where(
+                    reset_dialogue, torch.zeros_like(dialogue_state), dialogue_state
+                )
             speaker_index = batch["speaker_indices"][:, turn]
             gather_index = speaker_index[:, None, None].expand(
                 -1, 1, self.speaker_dimension
             )
             previous_speaker = speaker_states.gather(1, gather_index).squeeze(1)
+            if self.training and turn > 0:
+                reset_speaker = torch.rand(
+                    batch_size, 1, device=text.device
+                ).lt(self.speaker_reset_probability)
+                previous_speaker = torch.where(
+                    reset_speaker,
+                    torch.zeros_like(previous_speaker),
+                    previous_speaker,
+                )
+            dialogue_view = self.dialogue_norm(dialogue_state) * dialogue_dropout
+            speaker_view = self.speaker_norm(previous_speaker) * speaker_dropout
             current = torch.cat((text[:, turn], audio[:, turn]), dim=-1)
             new_dialogue = self.dialogue_cell(
-                torch.cat((current, previous_speaker), dim=-1), dialogue_state
+                torch.cat((current, speaker_view), dim=-1), dialogue_view
             )
             new_speaker = self.speaker_cell(
-                torch.cat((current, dialogue_state), dim=-1), previous_speaker
+                torch.cat((current, dialogue_view), dim=-1), speaker_view
             )
+            normalized_dialogue = self.dialogue_norm(new_dialogue) * dialogue_dropout
+            normalized_speaker = self.speaker_norm(new_speaker) * speaker_dropout
             context = self.context_hidden(
-                torch.cat((text[:, turn], new_dialogue, new_speaker), dim=-1)
+                torch.cat(
+                    (text[:, turn], normalized_dialogue, normalized_speaker), dim=-1
+                )
             )
             base_logits = batch["text_logits"][:, turn]
             probabilities = torch.softmax(base_logits.detach(), dim=-1)
@@ -313,7 +375,7 @@ class RecurrentDialogueModel(torch.nn.Module):
                 dim=-1, keepdim=True
             ) / math.log(self.number_of_classes)
             audio_prediction = self.audio_classifier(audio[:, turn])
-            history = previous_speaker.norm(dim=-1, keepdim=True)
+            history = speaker_view.norm(dim=-1, keepdim=True)
             gate_input = torch.cat(
                 (audio_prediction, confidence, entropy, history), dim=-1
             )
@@ -384,14 +446,17 @@ def masked_cross_entropy(logits, labels, mask, weights):
     )
 
 
-def calculate_loss(matched, shuffled, batch, class_weights, args):
+def calculate_loss(
+    matched, shuffled, batch, class_weights, args, counterfactual_matched=None
+):
     mask, labels = batch["valid_mask"], batch["labels"]
+    comparison = matched if counterfactual_matched is None else counterfactual_matched
     fused = masked_cross_entropy(matched["logits"], labels, mask, class_weights)
     audio = masked_cross_entropy(
         matched["audio_logits"], labels, mask, class_weights
     )
     targets = labels[mask].unsqueeze(1)
-    matched_support = torch.log_softmax(matched["logits"][mask], dim=-1).gather(
+    matched_support = torch.log_softmax(comparison["logits"][mask], dim=-1).gather(
         1, targets
     )
     shuffled_support = torch.log_softmax(shuffled["logits"][mask], dim=-1).gather(
@@ -407,12 +472,19 @@ def calculate_loss(matched, shuffled, batch, class_weights, args):
         matched["context_correction"][mask].square().mean()
         + matched["audio_correction"][mask].square().mean()
     )
+    gate_penalty = gate_ceiling_penalty(
+        matched,
+        mask,
+        args.context_gate_soft_ceiling,
+        args.audio_gate_soft_ceiling,
+    )
     total = (
         fused
         + args.audio_loss_weight * audio
         + args.counterfactual_weight * ranking
         + args.negative_residual_weight * shuffled_audio_residual
         + args.correction_penalty_weight * correction
+        + args.gate_penalty_weight * gate_penalty
     )
     components = {
         "total": total,
@@ -421,6 +493,7 @@ def calculate_loss(matched, shuffled, batch, class_weights, args):
         "counterfactual": ranking,
         "negative_residual": shuffled_audio_residual,
         "correction": correction,
+        "gate_penalty": gate_penalty,
         "context_gate": matched["context_gate"][mask].mean(),
         "audio_gate": matched["audio_gate"][mask].mean(),
     }
@@ -440,9 +513,17 @@ def train_epoch(model, loader, optimizer, class_weights, args, device):
     for step, batch in enumerate(loader, start=1):
         batch = move_batch(batch, device)
         matched = model(batch)
+        model.eval()
+        counterfactual_matched = model(batch)
         shuffled = model(shuffle_valid_audio(batch))
+        model.train()
         loss, components = calculate_loss(
-            matched, shuffled, batch, class_weights, args
+            matched,
+            shuffled,
+            batch,
+            class_weights,
+            args,
+            counterfactual_matched=counterfactual_matched,
         )
         (loss / args.gradient_accumulation).backward()
         rows.append(components)
@@ -504,13 +585,52 @@ def write_predictions(path, records, result):
             )
 
 
+def make_run_seeds(base_seed, runs, step):
+    if runs < 1 or step < 1:
+        raise ValueError("runs and seed step must be positive")
+    return [base_seed + index * step for index in range(runs)]
+
+
+def summarize_runs(runs):
+    fields = {
+        "weighted_f1": [
+            run["test_recurrent_matched"]["weighted_f1"] for run in runs
+        ],
+        "macro_f1": [run["test_recurrent_matched"]["macro_f1"] for run in runs],
+        "state_margin": [run["test_state_margin"] for run in runs],
+        "audio_margin": [run["test_audio_margin"] for run in runs],
+    }
+    return {
+        name: {
+            "count": len(values),
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+        }
+        for name, values in fields.items()
+    }
+
+
+def load_completed_run(output_dir, expected_seed):
+    metrics_path = output_dir / "metrics.json"
+    if not metrics_path.exists():
+        return None
+    report = json.loads(metrics_path.read_text(encoding="utf-8"))
+    return report if report.get("seed") == expected_seed else None
+
+
 def parse_arguments():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
     parser.add_argument("--text-model", type=Path, default=root / "initial-testing/training-output-text/best-model")
     parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-recurrent-dialogue")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=root / "initial-testing/training-output-recurrent-dialogue-regularized",
+    )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--dialogue-batch-size", type=int, default=16)
     parser.add_argument("--encoder-batch-size", type=int, default=16)
@@ -522,6 +642,11 @@ def parse_arguments():
     parser.add_argument("--dialogue-state-dimension", type=int, default=256)
     parser.add_argument("--speaker-state-dimension", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--dialogue-state-dropout", type=float, default=0.10)
+    parser.add_argument("--speaker-state-dropout", type=float, default=0.15)
+    parser.add_argument("--audio-dropout", type=float, default=0.10)
+    parser.add_argument("--dialogue-reset-probability", type=float, default=0.03)
+    parser.add_argument("--speaker-reset-probability", type=float, default=0.05)
     parser.add_argument("--context-max-gate", type=float, default=0.25)
     parser.add_argument("--audio-max-gate", type=float, default=0.15)
     parser.add_argument("--initial-gate-bias", type=float, default=-2.0)
@@ -530,77 +655,62 @@ def parse_arguments():
     parser.add_argument("--counterfactual-margin", type=float, default=0.1)
     parser.add_argument("--negative-residual-weight", type=float, default=0.2)
     parser.add_argument("--correction-penalty-weight", type=float, default=0.01)
+    parser.add_argument("--context-gate-soft-ceiling", type=float, default=0.18)
+    parser.add_argument("--audio-gate-soft-ceiling", type=float, default=0.10)
+    parser.add_argument("--gate-penalty-weight", type=float, default=0.2)
     parser.add_argument("--context-window", type=int, default=3)
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--shuffle-seeds", type=int, nargs="+", default=[43, 44, 45])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--runs", type=int, default=20)
+    parser.add_argument("--seed-step", type=int, default=1)
     parser.add_argument("--max-samples-per-split", type=int)
     parser.add_argument("--rebuild-text-cache", action="store_true")
+    parser.add_argument("--retrain-completed-runs", action="store_true")
     return parser.parse_args()
 
 
 def validate_arguments(args):
     for name in (
         "epochs", "dialogue_batch_size", "encoder_batch_size",
-        "gradient_accumulation", "patience",
+        "gradient_accumulation", "patience", "runs", "seed_step",
     ):
         if getattr(args, name) < 1:
             raise ValueError(f"{name.replace('_', ' ')} must be positive")
     if not args.text_model.exists():
         raise FileNotFoundError(f"text checkpoint not found: {args.text_model}")
+    for name in (
+        "dropout", "dialogue_state_dropout", "speaker_state_dropout",
+        "audio_dropout", "dialogue_reset_probability", "speaker_reset_probability",
+    ):
+        if not 0 <= getattr(args, name) < 1:
+            raise ValueError(f"{name.replace('_', ' ')} must be in [0, 1)")
 
 
-def main():
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-    args = parse_arguments()
-    validate_arguments(args)
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    device = select_device(torch)
-    tokenizer = AutoTokenizer.from_pretrained(args.text_model)
-    text_model = AutoModelForSequenceClassification.from_pretrained(
-        args.text_model
-    ).to(device)
-    records = {}
-    for split in ("train", "dev", "test"):
-        rows = load_split_rows(args.raw_archive, split)
-        if args.max_samples_per_split is not None:
-            rows = rows[: args.max_samples_per_split]
-        records[split] = combine_records(
-            rows, args.context_window, args.audio_cache_dir, split
-        )
-        if not records[split]:
-            raise FileNotFoundError(
-                f"no Phase 1 cache found for {split}; run audio_phase1.py first"
-            )
-        cache_text_features(
-            records[split], tokenizer, text_model, device,
-            args.audio_cache_dir / split / f"recurrent-text-c{args.context_window}",
-            args,
-        )
-    del text_model
-    attach_speaker_relative_acoustics(records)
-    emotion_stats = load_cached_features(records)
+def train_one_run(args, records, device, seed, output_dir, run_number):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    run_args = argparse.Namespace(**vars(args))
+    run_args.seed = seed
     sample = records["train"][0]
     model = RecurrentDialogueModel(
         len(sample["text_embedding"]),
         len(sample["audio_features"]),
         len(EMOTION_LABELS),
-        args,
+        run_args,
     ).to(device)
     loaders = {
-        split: make_loader(records[split], args, split == "train")
+        split: make_loader(records[split], run_args, split == "train")
         for split in records
     }
     dev_shuffled = [
         make_loader(
-            records["dev"], args, False,
+            records["dev"], run_args, False,
             different_label_audio_mapping(records["dev"], seed),
         )
-        for seed in args.shuffle_seeds
+        for seed in run_args.shuffle_seeds
     ]
     train_labels = np.array(
         [EMOTION_LABELS.index(record["label"]) for record in records["train"]]
@@ -609,21 +719,23 @@ def main():
         sqrt_class_weights(train_labels, len(EMOTION_LABELS))
     ).to(device)
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+        model.parameters(), lr=run_args.learning_rate,
+        weight_decay=run_args.weight_decay,
     )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint = args.output_dir / "best_recurrent_dialogue.pt"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = output_dir / "best_recurrent_dialogue.pt"
     baseline = evaluate(model, loaders["dev"], device)["text_metrics"]
     print(
-        f"Device: {device}; dialogues: {len(loaders['train'].dataset)}; "
+        f"Run {run_number:02d}/{args.runs}; seed={seed}; device={device}; "
+        f"dialogues: {len(loaders['train'].dataset)}; "
         f"utterances: {len(records['train'])}; text dev weighted F1: "
         f"{baseline['weighted_f1']:.4f}"
     )
     history, best_score, best_epoch, stale = [], (-1, -1.0, -1.0), 0, 0
     started = time.perf_counter()
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, run_args.epochs + 1):
         losses = train_epoch(
-            model, loaders["train"], optimizer, class_weights, args, device
+            model, loaders["train"], optimizer, class_weights, run_args, device
         )
         matched = evaluate(model, loaders["dev"], device)
         reset = evaluate(model, loaders["dev"], device, reset_each_turn=True)
@@ -666,7 +778,7 @@ def main():
             torch.save(model.state_dict(), checkpoint)
         else:
             stale += 1
-            if stale >= args.patience:
+            if stale >= run_args.patience:
                 print(f"Early stopping after epoch {epoch}")
                 break
     model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
@@ -674,10 +786,10 @@ def main():
     test_reset = evaluate(model, loaders["test"], device, reset_each_turn=True)
     test_zero_audio = evaluate(model, loaders["test"], device, zero_audio=True)
     test_shuffled = []
-    for seed in args.shuffle_seeds:
+    for shuffle_seed in run_args.shuffle_seeds:
         loader = make_loader(
-            records["test"], args, False,
-            different_label_audio_mapping(records["test"], seed),
+            records["test"], run_args, False,
+            different_label_audio_mapping(records["test"], shuffle_seed),
         )
         test_shuffled.append(evaluate(model, loader, device))
     audio_margin = test["metrics"]["weighted_f1"] - max(
@@ -688,20 +800,18 @@ def main():
         - test_reset["metrics"]["weighted_f1"]
     )
     write_predictions(
-        args.output_dir / "test_predictions.csv", records["test"], test
+        output_dir / "test_predictions.csv", records["test"], test
     )
-    np.savez_compressed(
-        args.output_dir / "emotion_normalization.npz",
-        mean=emotion_stats[0], std=emotion_stats[1],
-    )
-    (args.output_dir / "training_history.json").write_text(
+    (output_dir / "training_history.json").write_text(
         json.dumps(history, indent=2), encoding="utf-8"
     )
     report = {
         "configuration": {
             key: str(value) if isinstance(value, Path) else value
-            for key, value in vars(args).items()
+            for key, value in vars(run_args).items()
         },
+        "run_number": run_number,
+        "seed": seed,
         "samples": {split: len(value) for split, value in records.items()},
         "dialogues": {
             split: len(group_dialogues(value)) for split, value in records.items()
@@ -718,7 +828,7 @@ def main():
         "mean_audio_gate": test["mean_audio_gate"],
         "runtime_seconds": time.perf_counter() - started,
     }
-    (args.output_dir / "metrics.json").write_text(
+    (output_dir / "metrics.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8"
     )
     print(f"Text test weighted F1: {test['text_metrics']['weighted_f1']:.4f}")
@@ -726,7 +836,99 @@ def main():
     print(f"Recurrent test macro F1: {test['metrics']['macro_f1']:.4f}")
     print(f"State margin over reset: {state_margin:+.4f}")
     print(f"Audio margin over worst shuffle: {audio_margin:+.4f}")
-    print(f"Outputs: {args.output_dir}")
+    print(f"Run outputs: {output_dir}")
+    del optimizer, model
+    if device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+    return report
+
+
+def main():
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    args = parse_arguments()
+    validate_arguments(args)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    device = select_device(torch)
+    tokenizer = AutoTokenizer.from_pretrained(args.text_model)
+    text_model = AutoModelForSequenceClassification.from_pretrained(
+        args.text_model
+    ).to(device)
+    records = {}
+    for split in ("train", "dev", "test"):
+        rows = load_split_rows(args.raw_archive, split)
+        if args.max_samples_per_split is not None:
+            rows = rows[: args.max_samples_per_split]
+        records[split] = combine_records(
+            rows, args.context_window, args.audio_cache_dir, split
+        )
+        if not records[split]:
+            raise FileNotFoundError(
+                f"no Phase 1 cache found for {split}; run audio_phase1.py first"
+            )
+        cache_text_features(
+            records[split], tokenizer, text_model, device,
+            args.audio_cache_dir / split / f"recurrent-text-c{args.context_window}",
+            args,
+        )
+    del text_model, tokenizer
+    if device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+    attach_speaker_relative_acoustics(records)
+    emotion_stats = load_cached_features(records)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        args.output_dir / "emotion_normalization.npz",
+        mean=emotion_stats[0], std=emotion_stats[1],
+    )
+    reports = []
+    total_started = time.perf_counter()
+    seeds = make_run_seeds(args.seed, args.runs, args.seed_step)
+    for run_number, seed in enumerate(seeds, start=1):
+        run_dir = args.output_dir / f"run-{run_number:02d}-seed-{seed}"
+        completed = (
+            None
+            if args.retrain_completed_runs
+            else load_completed_run(run_dir, seed)
+        )
+        if completed is not None:
+            print(
+                f"Run {run_number:02d}/{args.runs}; seed={seed}; "
+                "reusing completed result"
+            )
+            reports.append(completed)
+        else:
+            reports.append(
+                train_one_run(
+                    args, records, device, seed, run_dir, run_number
+                )
+            )
+        aggregate = {
+            "configuration": {
+                key: str(value) if isinstance(value, Path) else value
+                for key, value in vars(args).items()
+            },
+            "completed_runs": len(reports),
+            "requested_runs": args.runs,
+            "seeds": seeds,
+            "summary": summarize_runs(reports),
+            "runs": reports,
+            "runtime_seconds": time.perf_counter() - total_started,
+        }
+        (args.output_dir / "aggregate_metrics.json").write_text(
+            json.dumps(aggregate, indent=2), encoding="utf-8"
+        )
+    summary = summarize_runs(reports)
+    print(
+        f"Completed {len(reports)} runs; weighted F1 "
+        f"{summary['weighted_f1']['mean']:.4f} ± "
+        f"{summary['weighted_f1']['std']:.4f}; macro F1 "
+        f"{summary['macro_f1']['mean']:.4f} ± "
+        f"{summary['macro_f1']['std']:.4f}"
+    )
+    print(f"Aggregate outputs: {args.output_dir}")
     return 0
 
 
