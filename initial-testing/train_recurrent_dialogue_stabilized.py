@@ -89,6 +89,17 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
                 dialogue_state = torch.where(
                     reset_dialogue, torch.zeros_like(dialogue_state), dialogue_state
                 )
+            forced_reset = batch.get("forced_reset_mask")
+            if forced_reset is not None:
+                reset_rows = forced_reset[:, turn].unsqueeze(1)
+                dialogue_state = torch.where(
+                    reset_rows, torch.zeros_like(dialogue_state), dialogue_state
+                )
+                speaker_states = torch.where(
+                    reset_rows.unsqueeze(2),
+                    torch.zeros_like(speaker_states),
+                    speaker_states,
+                )
 
             speaker_index = batch["speaker_indices"][:, turn]
             gather_index = speaker_index[:, None, None].expand(
