@@ -4,6 +4,7 @@ numpy>=2,<3
 opensmile>=2.5,<3
 opencv-python-headless>=4.10,<5
 pillow>=10,<13
+scikit-learn>=1.5,<2
 speechbrain>=1.0,<2
 torch>=2.6,<3
 torchvision>=0.21,<1

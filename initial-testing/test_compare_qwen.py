@@ -14,6 +14,9 @@ class ComparisonTests(unittest.TestCase):
         self.assertNotIn("turn 3", prompt)
         self.assertNotIn('"expected"', prompt)
         self.assertNotIn('"predicted"', prompt)
+        text_prompt = comparison.make_prompt(rows[2], [], has_media=False)
+        self.assertNotIn("attached media", text_prompt)
+        self.assertIn("turn 2", text_prompt)
 
     def test_structured_decoder_only_allows_complete_label_json(self):
         class Tokenizer:

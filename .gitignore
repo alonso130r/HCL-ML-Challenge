@@ -16,6 +16,7 @@ __pycache__/
 /initial-testing/audio-cache/
 /initial-testing/video-cache/
 /initial-testing/results/
+/initial-testing/results-*/
 /initial-testing/training-output*/
 /initial-testing/checkpoints/
 *.npz

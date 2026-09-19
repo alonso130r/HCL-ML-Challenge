@@ -1,0 +1,2 @@
+# Apple Silicon. Install alongside the existing environment for MELD utilities.
+mlx-lm[train]==0.31.3
