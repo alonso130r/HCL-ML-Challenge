@@ -1,0 +1,232 @@
+{
+  "paired_count": 3,
+  "models": {
+    "baseline": {
+      "attempted": 3,
+      "successful": 3,
+      "errors": 0,
+      "successful_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "paired_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "mean_latency_ms": null,
+      "median_latency_ms": null
+    },
+    "omni": {
+      "attempted": 3,
+      "successful": 3,
+      "errors": 0,
+      "successful_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "paired_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "mean_latency_ms": 760.5461669930568,
+      "median_latency_ms": 503.70016699889675
+    },
+    "vision": {
+      "attempted": 3,
+      "successful": 3,
+      "errors": 0,
+      "successful_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "paired_metrics": {
+        "labels": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ],
+        "accuracy": 0.6666666666666666,
+        "macro_f1": 0.1142857142857143,
+        "weighted_f1": 0.5333333333333333,
+        "per_class_f1": {
+          "neutral": 0.8,
+          "joy": 0.0,
+          "surprise": 0.0,
+          "anger": 0.0,
+          "sadness": 0.0,
+          "fear": 0.0,
+          "disgust": 0.0
+        },
+        "support": {
+          "neutral": 2,
+          "joy": 0,
+          "surprise": 0,
+          "anger": 1,
+          "sadness": 0,
+          "fear": 0,
+          "disgust": 0
+        }
+      },
+      "mean_latency_ms": 804.7781390099166,
+      "median_latency_ms": 748.8136250176467
+    }
+  },
+  "runs": {
+    "omni": {
+      "model_id": "Qwen/Qwen2.5-Omni-3B",
+      "device": "mps",
+      "dtype": "torch.float16",
+      "load_seconds": 6.458794000034686
+    },
+    "vision": {
+      "model_id": "Qwen/Qwen3.5-2B",
+      "device": "mps",
+      "dtype": "torch.float16",
+      "load_seconds": 1.5321482499712147
+    }
+  }
+}

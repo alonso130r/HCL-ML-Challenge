@@ -1,0 +1,9 @@
+{"model": "baseline", "dialogue_id": "3", "utterance_id": "4", "expected": "anger", "predicted": "neutral", "status": "ok", "latency_ms": null}
+{"model": "baseline", "dialogue_id": "100", "utterance_id": "17", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": null}
+{"model": "baseline", "dialogue_id": "181", "utterance_id": "3", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": null}
+{"model": "omni", "dialogue_id": "3", "utterance_id": "4", "expected": "anger", "predicted": "neutral", "status": "ok", "latency_ms": 1285.2157090092078, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}
+{"model": "omni", "dialogue_id": "100", "utterance_id": "17", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": 503.70016699889675, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}
+{"model": "omni", "dialogue_id": "181", "utterance_id": "3", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": 492.72262497106567, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}
+{"model": "vision", "dialogue_id": "3", "utterance_id": "4", "expected": "anger", "predicted": "neutral", "status": "ok", "latency_ms": 936.4283750182949, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}
+{"model": "vision", "dialogue_id": "100", "utterance_id": "17", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": 748.8136250176467, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}
+{"model": "vision", "dialogue_id": "181", "utterance_id": "3", "expected": "neutral", "predicted": "neutral", "status": "ok", "latency_ms": 729.092416993808, "output": {"emotion": "neutral"}, "error": null, "raw_output": "{\"emotion\":\"neutral\"}"}

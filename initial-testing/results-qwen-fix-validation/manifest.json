@@ -1,0 +1,70 @@
+{
+  "arguments": {
+    "baseline_predictions": "/Users/vijaygoyal/Documents/GitHub/HCL-challenge/initial-testing/training-output-recurrent-dialogue-stabilized-c2-five/run-02-seed-43/test_predictions.csv",
+    "raw_archive": "/Users/vijaygoyal/Documents/GitHub/HCL-challenge/data/MELD/MELD.Raw.tar.gz",
+    "output_dir": "initial-testing/results-qwen-fix-validation",
+    "sample_size": 3,
+    "seed": 42,
+    "context_window": 2,
+    "models": [
+      "omni",
+      "vision"
+    ],
+    "omni_model": "Qwen/Qwen2.5-Omni-3B",
+    "vision_model": "Qwen/Qwen3.5-2B",
+    "device": "auto",
+    "video_frames": 8,
+    "video_max_pixels": 262144,
+    "max_audio_seconds": 30,
+    "local_files_only": true,
+    "dry_run": false
+  },
+  "samples": [
+    {
+      "dialogue_id": "3",
+      "utterance_id": "4",
+      "speaker": "Steve",
+      "utterance": "Okay, fine, whatever. Welcome to the building.",
+      "expected": "anger",
+      "predicted": "neutral"
+    },
+    {
+      "dialogue_id": "100",
+      "utterance_id": "17",
+      "speaker": "Phoebe",
+      "utterance": "Leslie?",
+      "expected": "neutral",
+      "predicted": "neutral"
+    },
+    {
+      "dialogue_id": "181",
+      "utterance_id": "3",
+      "speaker": "All",
+      "utterance": "Hey, Phoebe.",
+      "expected": "neutral",
+      "predicted": "neutral"
+    }
+  ],
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "emotion": {
+        "type": "string",
+        "enum": [
+          "neutral",
+          "joy",
+          "surprise",
+          "anger",
+          "sadness",
+          "fear",
+          "disgust"
+        ]
+      }
+    },
+    "required": [
+      "emotion"
+    ],
+    "additionalProperties": false
+  },
+  "purpose": "Regression smoke test: one decoding failure and both short-video failures from the original run; not an accuracy benchmark."
+}
