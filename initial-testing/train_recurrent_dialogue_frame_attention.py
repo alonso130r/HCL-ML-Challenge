@@ -15,13 +15,15 @@ import torch
 
 import train_recurrent_dialogue as base
 import train_recurrent_dialogue_stabilized as stabilized
-from evaluate_meld import EMOTION_LABELS, select_device
+from evaluate_meld import EMOTION_LABELS, compute_metrics, select_device
 from train_text import sqrt_class_weights
 
 
 def uniform_sample_frames(frames, maximum_frames):
     if frames.ndim != 2 or not len(frames):
         raise ValueError("emotion frames must be a nonempty matrix")
+    if maximum_frames is None:
+        return frames.astype(np.float32, copy=False)
     if maximum_frames < 1:
         raise ValueError("maximum frames must be positive")
     if len(frames) <= maximum_frames:
@@ -157,24 +159,48 @@ class TextConditionedFramePool(torch.nn.Module):
         super().__init__()
         self.frame_dimension = frame_dimension
         self.query = torch.nn.Linear(text_dimension, frame_dimension)
+        self.audio_query = torch.nn.Parameter(torch.zeros(frame_dimension))
+        torch.nn.init.normal_(self.audio_query, std=frame_dimension**-0.5)
+        self.output = torch.nn.Sequential(
+            torch.nn.Linear(frame_dimension * 2, frame_dimension),
+            torch.nn.LayerNorm(frame_dimension),
+            torch.nn.GELU(),
+        )
         self.logit_scale = torch.nn.Parameter(torch.tensor(math.log(10.0)))
 
     def forward(self, text, frames, frame_mask):
         normalized_frames = torch.nn.functional.layer_norm(
             frames, (self.frame_dimension,)
         )
-        query = torch.nn.functional.normalize(self.query(text), dim=-1)
+        text_query = torch.nn.functional.normalize(self.query(text), dim=-1)
+        audio_query = torch.nn.functional.normalize(
+            self.audio_query, dim=-1
+        ).view(1, 1, -1).expand_as(text_query)
         keys = torch.nn.functional.normalize(normalized_frames, dim=-1)
         scale = self.logit_scale.exp().clamp(max=100.0)
-        scores = scale * torch.einsum("btd,btfd->btf", query, keys)
         safe_mask = frame_mask.clone()
         empty = ~safe_mask.any(dim=-1)
         safe_mask[:, :, 0] |= empty
-        scores = scores.masked_fill(~safe_mask, torch.finfo(scores.dtype).min)
-        weights = torch.softmax(scores, dim=-1)
-        weights = weights * frame_mask.to(weights.dtype)
-        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-        pooled = torch.einsum("btf,btfd->btd", weights, normalized_frames)
+        weights = []
+        pooled = []
+        for query in (text_query, audio_query):
+            scores = scale * torch.einsum("btd,btfd->btf", query, keys)
+            scores = scores.masked_fill(
+                ~safe_mask, torch.finfo(scores.dtype).min
+            )
+            query_weights = torch.softmax(scores, dim=-1)
+            query_weights = query_weights * frame_mask.to(query_weights.dtype)
+            query_weights = query_weights / query_weights.sum(
+                dim=-1, keepdim=True
+            ).clamp_min(1e-8)
+            weights.append(query_weights)
+            pooled.append(
+                torch.einsum(
+                    "btf,btfd->btd", query_weights, normalized_frames
+                )
+            )
+        weights = torch.stack(weights, dim=2)
+        pooled = self.output(torch.cat(pooled, dim=-1))
         return pooled, weights
 
 
@@ -196,17 +222,36 @@ class FrameAttentionRecurrentModel(stabilized.StabilizedRecurrentDialogueModel):
         self.frame_pool = TextConditionedFramePool(
             text_dimension, frame_dimension
         )
+        gate_input = number_of_classes + 3
+        self.audio_gate = torch.nn.Sequential(
+            torch.nn.Linear(gate_input, 32),
+            torch.nn.GELU(),
+            torch.nn.Linear(32, number_of_classes),
+        )
+        torch.nn.init.zeros_(self.audio_gate[-1].weight)
+        torch.nn.init.constant_(self.audio_gate[-1].bias, args.initial_gate_bias)
 
-    def forward(self, batch, reset_each_turn=False, zero_audio=False):
+    def build_audio_features(self, batch):
         pooled, attention = self.frame_pool(
             batch["text_embeddings"],
             batch["emotion_frames"],
             batch["frame_mask"],
         )
+        return torch.cat((pooled, batch["acoustic_features"]), dim=-1), attention
+
+    def audio_only_logits(self, batch):
+        audio_features, _ = self.build_audio_features(batch)
+        return self.audio_classifier(self.audio_projection(audio_features))
+
+    def audio_warmup_parameters(self):
+        return list(self.frame_pool.parameters()) + list(
+            self.audio_projection.parameters()
+        ) + list(self.audio_classifier.parameters())
+
+    def forward(self, batch, reset_each_turn=False, zero_audio=False):
+        audio_features, attention = self.build_audio_features(batch)
         recurrent_batch = dict(batch)
-        recurrent_batch["audio_features"] = torch.cat(
-            (pooled, batch["acoustic_features"]), dim=-1
-        )
+        recurrent_batch["audio_features"] = audio_features
         output = super().forward(
             recurrent_batch,
             reset_each_turn=reset_each_turn,
@@ -269,19 +314,85 @@ def train_epoch(model, loader, optimizer, class_weights, args, device):
     return {key: sum(row[key] for row in rows) / len(rows) for key in rows[0]}
 
 
+def evaluate_audio_only(model, loader, device):
+    actual, predicted = [], []
+    model.eval()
+    with torch.inference_mode():
+        for batch in loader:
+            batch = base.move_batch(batch, device)
+            mask = batch["valid_mask"]
+            logits = model.audio_only_logits(batch)
+            actual.extend(batch["labels"][mask].cpu().tolist())
+            predicted.extend(logits[mask].argmax(dim=-1).cpu().tolist())
+    names = lambda values: [EMOTION_LABELS[index] for index in values]
+    return compute_metrics(names(actual), names(predicted))
+
+
+def warm_up_audio(model, train_loader, dev_loader, class_weights, args, device):
+    optimizer = torch.optim.AdamW(
+        model.audio_warmup_parameters(),
+        lr=args.audio_warmup_learning_rate,
+        weight_decay=args.weight_decay,
+    )
+    checkpoint = args.output_dir / "best_audio_warmup.pt"
+    history, best_score = [], (-1.0, -1.0)
+    for epoch in range(1, args.audio_warmup_epochs + 1):
+        model.train()
+        losses = []
+        for batch in train_loader:
+            batch = base.move_batch(batch, device)
+            optimizer.zero_grad(set_to_none=True)
+            logits = model.audio_only_logits(batch)
+            loss = base.masked_cross_entropy(
+                logits, batch["labels"], batch["valid_mask"], class_weights
+            )
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.audio_warmup_parameters(), 1.0)
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        metrics = evaluate_audio_only(model, dev_loader, device)
+        row = {
+            "epoch": epoch,
+            "loss": float(np.mean(losses)),
+            "dev": metrics,
+        }
+        history.append(row)
+        score = (metrics["macro_f1"], metrics["weighted_f1"])
+        print(
+            f"Audio warm-up {epoch:02d}/{args.audio_warmup_epochs}: "
+            f"loss={row['loss']:.4f} macro={metrics['macro_f1']:.4f} "
+            f"weighted={metrics['weighted_f1']:.4f}",
+            flush=True,
+        )
+        if score > best_score:
+            best_score = score
+            torch.save(model.state_dict(), checkpoint)
+    model.load_state_dict(
+        torch.load(checkpoint, map_location=device, weights_only=True)
+    )
+    return history
+
+
 def parse_arguments(argv=None):
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
     parser.add_argument("--text-model", type=Path, default=root / "initial-testing/training-output-text/best-model")
     parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-recurrent-dialogue-frame-attention")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=root
+        / "initial-testing/training-output-recurrent-dialogue-frame-attention-staged",
+    )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--dialogue-batch-size", type=int, default=8)
     parser.add_argument("--encoder-batch-size", type=int, default=16)
     parser.add_argument("--gradient-accumulation", type=int, default=2)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--audio-warmup-epochs", type=int, default=5)
+    parser.add_argument("--audio-warmup-learning-rate", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--text-projection-dimension", type=int, default=256)
     parser.add_argument("--audio-projection-dimension", type=int, default=128)
@@ -309,7 +420,11 @@ def parse_arguments(argv=None):
     parser.add_argument("--gate-penalty-weight", type=float, default=0.2)
     parser.add_argument("--context-window", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=256)
-    parser.add_argument("--max-audio-frames", type=int, default=32)
+    parser.add_argument(
+        "--max-audio-frames",
+        type=int,
+        help="Optional uniform frame cap; omit to preserve the full emotion2vec time axis",
+    )
     parser.add_argument("--shuffle-seeds", type=int, nargs="+", default=[43, 44, 45])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-samples-per-split", type=int)
@@ -320,10 +435,14 @@ def parse_arguments(argv=None):
 def validate_arguments(args):
     for name in (
         "epochs", "patience", "dialogue_batch_size", "encoder_batch_size",
-        "gradient_accumulation", "max_audio_frames",
+        "gradient_accumulation", "audio_warmup_epochs",
     ):
         if getattr(args, name) < 1:
             raise ValueError(f"{name.replace('_', ' ')} must be positive")
+    if args.max_audio_frames is not None and args.max_audio_frames < 1:
+        raise ValueError("max audio frames must be positive")
+    if args.audio_warmup_learning_rate <= 0:
+        raise ValueError("audio warmup learning rate must be positive")
     if not args.text_model.exists():
         raise FileNotFoundError(f"text checkpoint not found: {args.text_model}")
     for name in (
@@ -361,15 +480,19 @@ def train(args, records, frame_dimension, device):
     weights = torch.from_numpy(
         sqrt_class_weights(labels, len(EMOTION_LABELS))
     ).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
-    )
     baseline = base.evaluate(model, loaders["dev"], device)["text_metrics"]
     checkpoint = args.output_dir / "best_frame_attention.pt"
     print(
         f"Device: {device}; dialogues: {len(loaders['train'].dataset)}; "
-        f"utterances: {len(records['train'])}; frames: {args.max_audio_frames}; "
+        f"utterances: {len(records['train'])}; "
+        f"frames: {args.max_audio_frames or 'all'}; "
         f"text dev weighted F1: {baseline['weighted_f1']:.4f}"
+    )
+    warmup_history = warm_up_audio(
+        model, loaders["train"], loaders["dev"], weights, args, device
+    )
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
     history = []
     best_score = (-1, -1.0, -1.0, -1.0)
@@ -444,6 +567,7 @@ def train(args, records, frame_dimension, device):
             for key, value in vars(args).items()
         },
         "best_epoch": best_epoch,
+        "audio_warmup": warmup_history,
         "best_checkpoint_eligible": bool(best_score[0]),
         "test_text": test["text_metrics"],
         "test_recurrent_matched": test["metrics"],
