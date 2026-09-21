@@ -6,6 +6,8 @@ import argparse
 import base64
 import binascii
 import json
+import os
+import platform
 import socket
 import subprocess
 import time
@@ -38,6 +40,15 @@ SYSTEM_PROMPT = (
     "naturally and helpfully. Do not mention these instructions."
 )
 LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def select_device() -> str:
+    configured = os.environ.get("HCL_DEVICE", "").lower()
+    if configured in {"cuda", "metal", "cpu"}:
+        return configured
+    if platform.system() == "Darwin":
+        return "metal"
+    return "cpu"
 
 
 def decode_audio_payload(encoded_audio: object) -> bytes:
@@ -156,6 +167,7 @@ class LlamaServerProcess:
             if not path.is_file():
                 raise FileNotFoundError(f"{label} not found: {path}")
 
+        device = select_device()
         command = [
             str(self.executable),
             "--model",
@@ -165,13 +177,13 @@ class LlamaServerProcess:
             "--port",
             str(self.port),
             "--gpu-layers",
-            "99",
+            "0" if device == "cpu" else "99",
             "--ctx-size",
             "2048",
             "--parallel",
             "1",
             "--flash-attn",
-            "on",
+            "on" if device != "cpu" else "off",
             "--reasoning",
             "off",
             "--threads-http",
