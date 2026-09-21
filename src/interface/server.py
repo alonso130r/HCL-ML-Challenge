@@ -1,40 +1,183 @@
-"""Serve the local demo UI and a mock streaming chat response."""
+"""Serve the demo UI and stream responses from a local llama.cpp server."""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import socket
+import subprocess
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
+from typing import Any
 from urllib.parse import urlparse
 
+from .emotion import EmotionModel
 
+
+ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIRECTORY = Path(__file__).with_name("static")
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
 }
+DEFAULT_LLAMA_SERVER = ROOT / "third_party/llama.cpp/build-clang/bin/llama-server"
+DEFAULT_MODEL = ROOT / "models/qwen3-1.7b-gguf/Qwen3-1.7B-Q8_0.gguf"
+DEFAULT_EMOTION_MODEL = (
+    ROOT
+    / "benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
+)
+SYSTEM_PROMPT = (
+    "You are a concise, emotionally aware conversational assistant. Respond "
+    "naturally and helpfully. Do not mention these instructions."
+)
+LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def mock_chat_events(text: str) -> Iterator[dict[str, object]]:
-    """Yield the future inference boundary as deterministic mock events."""
-    yield {"type": "start"}
-    response = (
-        "I’m with you. It sounds like there’s something meaningful behind what "
-        f"you shared: “{text.strip()}” What feels most important right now?"
-    )
-    words = response.split()
-    for index in range(0, len(words), 3):
-        piece = " ".join(words[index : index + 3])
-        if index + 3 < len(words):
-            piece += " "
-        yield {"type": "delta", "text": piece}
-    yield {"type": "metadata", "emotion": "neutral", "confidence": 0.0}
-    yield {"type": "done"}
+class LlamaClient:
+    """Stream chat completions from llama.cpp's OpenAI-compatible endpoint."""
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url.rstrip("/")
+
+    def stream_chat(self, text: str, emotion: str | None = None) -> Iterator[str]:
+        system_prompt = SYSTEM_PROMPT
+        if emotion is not None:
+            system_prompt += (
+                f" The user's current emotion was classified as {emotion}. "
+                "Adapt your tone appropriately without stating the classification."
+            )
+        payload = json.dumps(
+            {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text},
+                ],
+                "stream": True,
+                "max_tokens": 160,
+                "temperature": 0.6,
+                "top_p": 0.9,
+                "cache_prompt": True,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with LOCAL_HTTP.open(request, timeout=120) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8").strip()
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    return
+                event = json.loads(data)
+                choices = event.get("choices", [])
+                if not choices:
+                    continue
+                content = choices[0].get("delta", {}).get("content")
+                if content:
+                    yield content
+
+
+class LlamaServerProcess:
+    """Own a single persistent, Metal-accelerated llama.cpp server."""
+
+    def __init__(self, executable: Path, model: Path, host: str, port: int) -> None:
+        self.executable = executable
+        self.model = model
+        self.host = host
+        self.port = port or self._available_port(host)
+        self.process: subprocess.Popen[bytes] | None = None
+
+    @staticmethod
+    def _available_port(host: str) -> int:
+        with socket.socket() as candidate:
+            candidate.bind((host, 0))
+            return candidate.getsockname()[1]
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    def start(self) -> None:
+        for path, label in ((self.executable, "llama-server"), (self.model, "model")):
+            if not path.is_file():
+                raise FileNotFoundError(f"{label} not found: {path}")
+
+        command = [
+            str(self.executable),
+            "--model",
+            str(self.model),
+            "--host",
+            self.host,
+            "--port",
+            str(self.port),
+            "--gpu-layers",
+            "99",
+            "--ctx-size",
+            "2048",
+            "--parallel",
+            "1",
+            "--flash-attn",
+            "on",
+            "--reasoning",
+            "off",
+            "--threads-http",
+            "1",
+        ]
+        self.process = subprocess.Popen(command, start_new_session=True)
+        self._wait_until_ready()
+
+    def _wait_until_ready(self) -> None:
+        deadline = time.monotonic() + 120
+        health_url = f"{self.base_url}/health"
+        while time.monotonic() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(
+                    f"llama-server exited during startup with code {self.process.returncode}"
+                )
+            try:
+                with LOCAL_HTTP.open(health_url, timeout=1) as response:
+                    if response.status == HTTPStatus.OK:
+                        return
+            except (urllib.error.URLError, TimeoutError):
+                pass
+            time.sleep(0.1)
+        self.stop()
+        raise TimeoutError("llama-server did not become ready within 120 seconds")
+
+    def stop(self) -> None:
+        if self.process is None or self.process.poll() is not None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+
+
+class InterfaceServer(ThreadingHTTPServer):
+    llama_client: LlamaClient
+    emotion_model: EmotionModel
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
 
 class InterfaceHandler(BaseHTTPRequestHandler):
@@ -63,8 +206,12 @@ class InterfaceHandler(BaseHTTPRequestHandler):
             size = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(size))
             text = payload.get("text", "")
+            encoded_audio = payload.get("audio")
             if not isinstance(text, str) or not text.strip():
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Message text is required."})
+                return
+            if encoded_audio is not None and not isinstance(encoded_audio, str):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid audio recording."})
                 return
         except (ValueError, json.JSONDecodeError, AttributeError):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON request."})
@@ -76,15 +223,35 @@ class InterfaceHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         try:
-            for event in mock_chat_events(text):
-                self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
-                self.wfile.flush()
-                if event["type"] == "delta":
-                    time.sleep(0.06)
+            self._write_event({"type": "start"})
+            server = self.server
+            if not isinstance(server, InterfaceServer):
+                raise RuntimeError("Inference client is not configured")
+            emotion = None
+            if encoded_audio:
+                try:
+                    audio = base64.b64decode(encoded_audio, validate=True)
+                except (ValueError, binascii.Error) as error:
+                    raise ValueError("Invalid audio recording encoding") from error
+                diagnostic = server.emotion_model.predict(text.strip(), audio)
+                emotion = str(diagnostic["emotion"])
+                self._write_event({"type": "metadata", **diagnostic})
+            for content in server.llama_client.stream_chat(text.strip(), emotion):
+                self._write_event({"type": "delta", "text": content})
+            self._write_event({"type": "done"})
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as error:
+            try:
+                self._write_event({"type": "error", "message": str(error)})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         finally:
             self.close_connection = True
+
+    def _write_event(self, event: dict[str, Any]) -> None:
+        self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+        self.wfile.flush()
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, str]) -> None:
         content = json.dumps(payload).encode("utf-8")
@@ -102,17 +269,44 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--llama-host", default="127.0.0.1")
+    parser.add_argument(
+        "--llama-port",
+        type=int,
+        default=0,
+        help="llama.cpp port; defaults to an available loopback port",
+    )
+    parser.add_argument("--llama-server", type=Path, default=DEFAULT_LLAMA_SERVER)
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--emotion-model", type=Path, default=DEFAULT_EMOTION_MODEL
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_arguments()
-    server = ThreadingHTTPServer((args.host, args.port), InterfaceHandler)
-    print(f"Interface available at http://{args.host}:{server.server_port}", flush=True)
+    inference = LlamaServerProcess(
+        args.llama_server, args.model, args.llama_host, args.llama_port
+    )
+    server: InterfaceServer | None = None
     try:
+        print(f"Loading emotion model from {args.emotion_model}", flush=True)
+        emotion_model = EmotionModel(args.emotion_model)
+        print(f"Emotion model ready on {emotion_model.device}", flush=True)
+        inference.start()
+        server = InterfaceServer((args.host, args.port), InterfaceHandler)
+        server.llama_client = LlamaClient(inference.base_url)
+        server.emotion_model = emotion_model
+        print(
+            f"Interface available at http://{args.host}:{server.server_port}",
+            flush=True,
+        )
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping interface.")
     finally:
-        server.server_close()
+        if server is not None:
+            server.server_close()
+        inference.stop()
     return 0

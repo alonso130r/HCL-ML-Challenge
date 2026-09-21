@@ -8,11 +8,14 @@ const messages = document.querySelector("#messages");
 const intro = document.querySelector("#intro");
 const statusText = document.querySelector("#status-text");
 const emotionReadout = document.querySelector("#emotion-readout");
+const emotionDiagnostic = document.querySelector("#emotion-diagnostic");
 const streamState = document.querySelector("#stream-state");
 
 let cameraStream = null;
 let recorder = null;
 let microphoneStream = null;
+let recordedAudio = null;
+let recordedChunks = [];
 
 function setStatus(text, isError = false) {
   statusText.textContent = text;
@@ -65,18 +68,26 @@ cameraToggle.addEventListener("click", async () => {
 recordButton.addEventListener("click", async () => {
   if (recorder?.state === "recording") {
     recorder.stop();
-    microphoneStream.getTracks().forEach((track) => track.stop());
-    recorder = null;
-    microphoneStream = null;
     recordButton.classList.remove("recording");
     recordButton.setAttribute("aria-pressed", "false");
     recordButton.setAttribute("aria-label", "Start recording");
-    setStatus("Audio captured locally");
+    setStatus("Preparing audio…");
     return;
   }
   try {
     microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     recorder = new MediaRecorder(microphoneStream);
+    recordedChunks = [];
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) recordedChunks.push(event.data);
+    });
+    recorder.addEventListener("stop", () => {
+      recordedAudio = new Blob(recordedChunks, { type: recorder.mimeType });
+      microphoneStream.getTracks().forEach((track) => track.stop());
+      recorder = null;
+      microphoneStream = null;
+      setStatus("Audio ready · enter the matching transcript");
+    });
     recorder.start();
     recordButton.classList.add("recording");
     recordButton.setAttribute("aria-pressed", "true");
@@ -86,6 +97,17 @@ recordButton.addEventListener("click", async () => {
     setStatus("Microphone permission was not granted", true);
   }
 });
+
+async function encodeAudio(blob) {
+  if (!blob) return null;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
 
 async function sendMessage() {
   const text = input.value.trim();
@@ -104,10 +126,12 @@ async function sendMessage() {
   const assistantBody = addMessage("assistant");
   assistantBody.classList.add("cursor");
   try {
+    const audio = await encodeAudio(recordedAudio);
+    recordedAudio = null;
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, audio }),
     });
     if (!response.ok || !response.body) throw new Error("Response could not be started.");
 
@@ -125,7 +149,15 @@ async function sendMessage() {
         if (event.type === "delta") assistantBody.textContent += event.text;
         if (event.type === "metadata") {
           emotionReadout.classList.add("ready");
-          emotionReadout.lastElementChild.textContent = "Emotion model offline";
+          const confidence = Math.round(event.confidence * 100);
+          emotionReadout.lastElementChild.textContent = `${event.emotion} · ${confidence}%`;
+          const textConfidence = Math.round(event.text.confidence * 100);
+          const audioConfidence = Math.round(event.audio.confidence * 100);
+          const gate = Math.round(event.audio_gate * 100);
+          emotionDiagnostic.textContent =
+            `TEXT ${event.text.emotion} ${textConfidence}% · ` +
+            `AUDIO ${event.audio.emotion} ${audioConfidence}% · ` +
+            `AUDIO GATE ${gate}%`;
         }
         if (event.type === "error") throw new Error(event.message);
       }

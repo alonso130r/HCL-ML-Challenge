@@ -64,8 +64,10 @@ button { color: inherit; }
 .cursor::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -.12em; background: var(--blue); animation: blink .75s infinite; }
 
 .composer { grid-column: 1 / -1; border-radius: 14px; padding: 12px 14px 10px; }
-.signal-row { display: flex; justify-content: space-between; align-items: center; margin: 0 4px 9px; }
+.signal-row { display: flex; justify-content: space-between; align-items: flex-start; margin: 0 4px 9px; }
+.emotion-panel { display: flex; flex-direction: column; gap: 5px; }
 .emotion-readout { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.emotion-diagnostic { color: #7d8490; font: 600 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .02em; }
 .emotion-dot { width: 6px; height: 6px; border-radius: 50%; background: #adb2bc; }
 .emotion-readout.ready .emotion-dot { background: var(--green); }
 .transport-label { color: #989eaa; font: 650 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }

@@ -29,7 +29,7 @@ from train_text import sqrt_class_weights  # noqa: E402
 import run_final_training as final_base  # noqa: E402
 
 
-PROTOCOL_VERSION = "light-frame-attention-v1"
+PROTOCOL_VERSION = "light-frame-attention-gate-080-v1"
 
 
 def selected_epoch(epochs):
@@ -106,8 +106,8 @@ def experiment_args(args, output_dir, seed):
         dialogue_reset_probability=0.01,
         speaker_reset_probability=0.03,
         context_max_gate=0.25,
-        audio_max_gate=0.15,
-        initial_gate_bias=-2.0,
+        audio_max_gate=0.80,
+        initial_gate_bias=1.10,
         audio_loss_weight=0.3,
         counterfactual_weight=0.5,
         counterfactual_margin=0.1,
@@ -117,8 +117,8 @@ def experiment_args(args, output_dir, seed):
         negative_residual_weight=0.2,
         correction_penalty_weight=0.01,
         context_gate_soft_ceiling=0.18,
-        audio_gate_soft_ceiling=0.10,
-        gate_penalty_weight=0.2,
+        audio_gate_soft_ceiling=0.70,
+        gate_penalty_weight=0.02,
         context_window=2,
         max_length=256,
         max_audio_frames=args.max_audio_frames,
@@ -321,8 +321,10 @@ def train_final(records, args, selected, device):
     metrics_path = final_dir / "metrics.json"
     checkpoint = final_dir / "best_frame_attention.pt"
     if metrics_path.exists() and checkpoint.exists() and not args.retrain_final:
-        print(f"Reusing final model: {checkpoint}")
-        return json.loads(metrics_path.read_text(encoding="utf-8"))
+        report = json.loads(metrics_path.read_text(encoding="utf-8"))
+        if report.get("protocol_version") == PROTOCOL_VERSION:
+            print(f"Reusing final model: {checkpoint}")
+            return report
     final_dir.mkdir(parents=True, exist_ok=True)
     run_args = experiment_args(args, final_dir, args.seeds[0])
     random.seed(run_args.seed)
