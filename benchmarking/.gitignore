@@ -1,1 +1,6 @@
 results/
+!results/
+results/*
+!results/final-frame-attention-light/
+!results/final-frame-attention-light/best-model/
+!results/final-frame-attention-light/best-model/**

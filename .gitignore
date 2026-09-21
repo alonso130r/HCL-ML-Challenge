@@ -25,6 +25,16 @@ __pycache__/
 *.ckpt
 *.safetensors
 
+# Publishable demo fine-tuned weights are explicitly re-included and tracked via Git LFS.
+!/initial-testing/training-output-text/
+/initial-testing/training-output-text/*
+!/initial-testing/training-output-text/best-model/
+!/initial-testing/training-output-text/best-model/**
+!/benchmarking/results/
+!/benchmarking/results/final-frame-attention-light/
+!/benchmarking/results/final-frame-attention-light/best-model/
+!/benchmarking/results/final-frame-attention-light/best-model/**
+
 # Experiment logs and temporary files
 /docs/
 /tmp/

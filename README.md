@@ -22,6 +22,18 @@ model. No browser speech service is used.
 The `ct-punc` FunASR model is also loaded automatically so transcripts include
 basic punctuation.
 
+## Run the demo
+
+Build `third_party/llama.cpp` so `build-clang/bin/llama-server` exists, then run:
+
+```bash
+./run_app.sh
+```
+
+The script accepts the same options as the Python app, for example
+`./run_app.sh --port 8001`. Fine-tuned demo weights are stored with Git LFS;
+experiment outputs remain local and ignored.
+
 ### My definition of "real-time"
 
 A system like this is useless unless the client can hold an actual conversation
