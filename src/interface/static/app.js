@@ -153,11 +153,15 @@ async function sendMessage() {
           emotionReadout.lastElementChild.textContent = `${event.emotion} · ${confidence}%`;
           const textConfidence = Math.round(event.text.confidence * 100);
           const audioConfidence = Math.round(event.audio.confidence * 100);
-          const gate = Math.round(event.audio_gate * 100);
+          const audioClass = event.audio.emotion;
+          const mix = Math.round(event.audio_mix * 100);
+          const change = event.audio_logit_change[audioClass];
+          const signedChange = `${change >= 0 ? "+" : ""}${change.toFixed(2)}`;
           emotionDiagnostic.textContent =
             `TEXT ${event.text.emotion} ${textConfidence}% · ` +
             `AUDIO ${event.audio.emotion} ${audioConfidence}% · ` +
-            `AUDIO GATE ${gate}%`;
+            `${audioClass.toUpperCase()} MIX ${mix}% · ` +
+            `${audioClass.toUpperCase()} Δ ${signedChange}`;
         }
         if (event.type === "error") throw new Error(event.message);
       }

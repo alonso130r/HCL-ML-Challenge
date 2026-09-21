@@ -148,7 +148,7 @@ def combine_records(rows, context_window: int, audio_cache_dir: Path, split: str
     return records
 
 
-def attach_speaker_relative_acoustics(records_by_split):
+def speaker_acoustic_normalization(records_by_split):
     summaries = {
         split: load_summary_matrices(records) for split, records in records_by_split.items()
     }
@@ -164,6 +164,11 @@ def attach_speaker_relative_acoustics(records_by_split):
             axis=1,
         ).astype(np.float32)
     final_stats = fit_normalizer(combined["train"])
+    return combined, absolute_stats, final_stats
+
+
+def attach_speaker_relative_acoustics(records_by_split):
+    combined, _, final_stats = speaker_acoustic_normalization(records_by_split)
     for split, records in records_by_split.items():
         values = normalize(combined[split], final_stats)
         for record, acoustic in zip(records, values):

@@ -465,13 +465,17 @@ def calculate_loss(
     ranking = torch.relu(
         args.counterfactual_margin - matched_support + shuffled_support
     ).mean()
-    shuffled_audio_residual = (
-        shuffled["audio_gate"][mask] * shuffled["audio_correction"][mask]
-    ).square().mean()
-    correction = (
-        matched["context_correction"][mask].square().mean()
-        + matched["audio_correction"][mask].square().mean()
-    )
+    if getattr(args, "direct_audio_mix", False):
+        shuffled_audio_residual = shuffled["audio_influence"][mask].square().mean()
+        correction = matched["context_correction"][mask].square().mean()
+    else:
+        shuffled_audio_residual = (
+            shuffled["audio_gate"][mask] * shuffled["audio_correction"][mask]
+        ).square().mean()
+        correction = (
+            matched["context_correction"][mask].square().mean()
+            + matched["audio_correction"][mask].square().mean()
+        )
     gate_penalty = gate_ceiling_penalty(
         matched,
         mask,

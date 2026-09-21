@@ -25,11 +25,12 @@ import train_recurrent_dialogue_stabilized as stabilized  # noqa: E402
 from evaluate_meld import EMOTION_LABELS, select_device  # noqa: E402
 from run_final_architecture_cv import assign_dialogue_folds  # noqa: E402
 from train_text import sqrt_class_weights  # noqa: E402
+from train_text_audio_phase2 import speaker_acoustic_normalization  # noqa: E402
 
 import run_final_training as final_base  # noqa: E402
 
 
-PROTOCOL_VERSION = "light-frame-attention-gate-080-v1"
+PROTOCOL_VERSION = "light-frame-attention-disagreement-gate-v1"
 
 
 def selected_epoch(epochs):
@@ -106,8 +107,10 @@ def experiment_args(args, output_dir, seed):
         dialogue_reset_probability=0.01,
         speaker_reset_probability=0.03,
         context_max_gate=0.25,
-        audio_max_gate=0.80,
-        initial_gate_bias=1.10,
+        audio_max_gate=1.0,
+        initial_gate_bias=-2.0,
+        direct_audio_mix=True,
+        disagreement_gate=True,
         audio_loss_weight=0.3,
         counterfactual_weight=0.5,
         counterfactual_margin=0.1,
@@ -119,6 +122,9 @@ def experiment_args(args, output_dir, seed):
         context_gate_soft_ceiling=0.18,
         audio_gate_soft_ceiling=0.70,
         gate_penalty_weight=0.02,
+        disagreement_gate_weight=1.0,
+        disagreement_gate_warmup_epochs=3,
+        disagreement_gate_learning_rate=2e-4,
         context_window=2,
         max_length=256,
         max_audio_frames=args.max_audio_frames,
@@ -190,6 +196,9 @@ def train_fold(split_records, args, device, seed, fold, run_dir):
     warmup = frame.warm_up_audio(
         model, train_loader, dev_loader, weights, run_args, device
     )
+    gate_warmup = frame.warm_up_disagreement_gate(
+        model, train_loader, run_args, device
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=0.01
     )
@@ -249,6 +258,7 @@ def train_fold(split_records, args, device, seed, fold, run_dir):
         "fold": fold + 1,
         "learning_rate": args.learning_rate,
         "warmup_epoch": warmup_best_epoch(warmup),
+        "gate_warmup": gate_warmup,
         "best_epoch": best_row["epoch"],
         "eligible": best_row["eligible"],
         "weighted_f1": best_row["metrics"]["weighted_f1"],
@@ -355,6 +365,9 @@ def train_final(records, args, selected, device):
         device,
         selected["warmup_epochs"],
     )
+    gate_warmup_history = frame.warm_up_disagreement_gate(
+        model, train_loader, run_args, device
+    )
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=0.01
     )
@@ -392,6 +405,7 @@ def train_final(records, args, selected, device):
         "test_audio_margin": controls["audio_margin"],
         "checkpoint": str(checkpoint.resolve()),
         "audio_warmup_history": warmup_history,
+        "gate_warmup_history": gate_warmup_history,
         "joint_history": joint_history,
     }
     metrics_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -474,11 +488,19 @@ def main(argv=None):
     records, normalization = stabilized.prepare_records(preparation_args, device)
     frame.attach_emotion_frames(records, args.max_audio_frames)
     records = final_base.renumber_dialogues(records)
+    _, absolute_stats, acoustic_stats = speaker_acoustic_normalization(records)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         args.output_dir / "emotion_normalization.npz",
         mean=normalization[0],
         std=normalization[1],
+    )
+    np.savez_compressed(
+        args.output_dir / "speaker_acoustic_normalization.npz",
+        absolute_mean=absolute_stats[0],
+        absolute_std=absolute_stats[1],
+        final_mean=acoustic_stats[0],
+        final_std=acoustic_stats[1],
     )
     assignments = assign_dialogue_folds(records["dev"], args.folds, args.fold_seed)
     runs = []

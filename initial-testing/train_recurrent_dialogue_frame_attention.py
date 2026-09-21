@@ -222,11 +222,11 @@ class FrameAttentionRecurrentModel(stabilized.StabilizedRecurrentDialogueModel):
         self.frame_pool = TextConditionedFramePool(
             text_dimension, frame_dimension
         )
-        gate_input = number_of_classes + 3
+        gate_input = 3 * number_of_classes + 9
         self.audio_gate = torch.nn.Sequential(
             torch.nn.Linear(gate_input, 32),
             torch.nn.GELU(),
-            torch.nn.Linear(32, number_of_classes),
+            torch.nn.Linear(32, 1),
         )
         torch.nn.init.zeros_(self.audio_gate[-1].weight)
         torch.nn.init.constant_(self.audio_gate[-1].bias, args.initial_gate_bias)
@@ -247,6 +247,9 @@ class FrameAttentionRecurrentModel(stabilized.StabilizedRecurrentDialogueModel):
         return list(self.frame_pool.parameters()) + list(
             self.audio_projection.parameters()
         ) + list(self.audio_classifier.parameters())
+
+    def disagreement_gate_parameters(self):
+        return list(self.audio_gate.parameters())
 
     def forward(self, batch, reset_each_turn=False, zero_audio=False):
         audio_features, attention = self.build_audio_features(batch)
@@ -370,6 +373,37 @@ def warm_up_audio(model, train_loader, dev_loader, class_weights, args, device):
     model.load_state_dict(
         torch.load(checkpoint, map_location=device, weights_only=True)
     )
+    return history
+
+
+def warm_up_disagreement_gate(model, train_loader, args, device):
+    optimizer = torch.optim.AdamW(
+        model.disagreement_gate_parameters(),
+        lr=args.disagreement_gate_learning_rate,
+        weight_decay=args.weight_decay,
+    )
+    history = []
+    model.eval()
+    for epoch in range(1, args.disagreement_gate_warmup_epochs + 1):
+        losses = []
+        for batch in train_loader:
+            batch = base.move_batch(batch, device)
+            optimizer.zero_grad(set_to_none=True)
+            output = model(batch)
+            loss = stabilized.disagreement_gate_loss(output, batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.disagreement_gate_parameters(), 1.0
+            )
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        value = float(np.mean(losses))
+        history.append({"epoch": epoch, "loss": value})
+        print(
+            f"Disagreement gate warm-up {epoch:02d}/"
+            f"{args.disagreement_gate_warmup_epochs}: loss={value:.4f}",
+            flush=True,
+        )
     return history
 
 

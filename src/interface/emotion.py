@@ -16,8 +16,14 @@ INITIAL_TESTING = ROOT / "initial-testing"
 if str(INITIAL_TESTING) not in sys.path:
     sys.path.insert(0, str(INITIAL_TESTING))
 
-from audio_phase1 import Emotion2VecExtractor  # noqa: E402
+from audio_phase1 import (  # noqa: E402
+    Emotion2VecExtractor,
+    extract_prosody_contours,
+    normalize,
+    summarize_sequence,
+)
 from evaluate_meld import EMOTION_LABELS  # noqa: E402
+from train_text_audio import extract_egemaps, sanitize_acoustic_features  # noqa: E402
 from train_recurrent_dialogue_frame_attention import (  # noqa: E402
     FrameAttentionRecurrentModel,
 )
@@ -28,6 +34,7 @@ CHECKPOINT = (
     ROOT
     / "benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
 )
+ACOUSTIC_NORMALIZATION_FILENAME = "speaker_acoustic_normalization.npz"
 
 
 def _model_arguments() -> SimpleNamespace:
@@ -43,8 +50,10 @@ def _model_arguments() -> SimpleNamespace:
         dialogue_reset_probability=0.01,
         speaker_reset_probability=0.03,
         context_max_gate=0.25,
-        audio_max_gate=0.80,
-        initial_gate_bias=1.10,
+        audio_max_gate=1.0,
+        initial_gate_bias=-2.0,
+        direct_audio_mix=True,
+        disagreement_gate=True,
     )
 
 
@@ -65,6 +74,25 @@ class EmotionModel:
             raise FileNotFoundError(f"frame-attention checkpoint not found: {checkpoint}")
         if not TEXT_MODEL.is_dir():
             raise FileNotFoundError(f"text checkpoint not found: {TEXT_MODEL}")
+        acoustic_normalization = checkpoint.parent.parent / ACOUSTIC_NORMALIZATION_FILENAME
+        if not acoustic_normalization.is_file():
+            raise FileNotFoundError(
+                f"speaker acoustic normalization not found: {acoustic_normalization}"
+            )
+
+        with np.load(acoustic_normalization) as values:
+            self.absolute_acoustic_stats = (
+                values["absolute_mean"].astype(np.float32),
+                values["absolute_std"].astype(np.float32),
+            )
+            self.final_acoustic_stats = (
+                values["final_mean"].astype(np.float32),
+                values["final_std"].astype(np.float32),
+            )
+        if self.absolute_acoustic_stats[0].shape != (98,) or self.absolute_acoustic_stats[1].shape != (98,):
+            raise ValueError("speaker absolute acoustic normalization must be 98-dimensional")
+        if self.final_acoustic_stats[0].shape != (197,) or self.final_acoustic_stats[1].shape != (197,):
+            raise ValueError("speaker final acoustic normalization must be 197-dimensional")
 
         self.torch = torch
         self.device = self._select_device(torch)
@@ -100,6 +128,7 @@ class EmotionModel:
         self.model.eval()
         self.turns: list[dict[str, np.ndarray]] = []
         self.transcripts: list[str] = []
+        self.acoustic_history: list[np.ndarray] = []
         self.lock = threading.Lock()
 
     @staticmethod
@@ -114,6 +143,7 @@ class EmotionModel:
         waveform = self._decode_audio(encoded_audio)
         frames = self.frame_extractor(waveform).astype(np.float32, copy=False)
         with self.lock:
+            acoustic_features = self._extract_speaker_acoustics(waveform)
             embedding, text_logits = self._encode_text(
                 text, self.transcripts[-2:]
             )
@@ -121,10 +151,7 @@ class EmotionModel:
                 "text_embedding": embedding,
                 "text_logits": text_logits,
                 "emotion_frames": frames,
-                # The modern checkpoint expects speaker-relative eGeMAPS features,
-                # but its training normalizer was not persisted. Zero is the neutral
-                # normalized value and leaves frame attention fully active.
-                "acoustic_features": np.zeros(197, dtype=np.float32),
+                "acoustic_features": acoustic_features,
             }
             self.turns.append(turn)
             self.transcripts.append(text)
@@ -138,7 +165,8 @@ class EmotionModel:
                 audio_only = self.torch.softmax(
                     output["audio_logits"][0, -1], dim=-1
                 )
-                audio_gate = float(output["audio_gate"][0, -1].mean().item())
+                audio_mix = float(output["audio_gate"][0, -1, 0].item())
+                audio_effects = output["audio_influence"][0, -1]
         result = self._top_prediction(fused)
         return {
             "emotion": result["emotion"],
@@ -146,8 +174,41 @@ class EmotionModel:
             "text": self._top_prediction(text_only),
             "audio": self._top_prediction(audio_only),
             "fused": result,
-            "audio_gate": audio_gate,
+            "audio_gate": audio_mix,
+            "audio_mix": audio_mix,
+            "audio_logit_change": {
+                label: float(audio_effects[index].item())
+                for index, label in enumerate(EMOTION_LABELS)
+            },
         }
+
+    def _extract_speaker_acoustics(self, waveform: np.ndarray) -> np.ndarray:
+        absolute = sanitize_acoustic_features(
+            np.concatenate(
+                (
+                    extract_egemaps(waveform),
+                    summarize_sequence(extract_prosody_contours(waveform)),
+                )
+            )
+        )
+        absolute_mean, absolute_std = self.absolute_acoustic_stats
+        if self.acoustic_history:
+            prior = np.stack(self.acoustic_history)
+            center = prior.mean(axis=0)
+            scale = prior.std(axis=0) if len(prior) > 1 else absolute_std
+            scale = np.where(scale < 1e-6, absolute_std, scale)
+        else:
+            center, scale = absolute_mean, absolute_std
+        relative = sanitize_acoustic_features((absolute - center) / scale)
+        combined = np.concatenate(
+            (
+                normalize(absolute, self.absolute_acoustic_stats),
+                relative,
+                np.asarray([np.log1p(len(self.acoustic_history))], dtype=np.float32),
+            )
+        )
+        self.acoustic_history.append(absolute)
+        return normalize(combined, self.final_acoustic_stats)
 
     @staticmethod
     def _top_prediction(probabilities) -> dict[str, object]:

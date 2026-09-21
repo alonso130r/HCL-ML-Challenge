@@ -34,8 +34,10 @@ class FrameAttentionTests(unittest.TestCase):
             dialogue_reset_probability=0.0,
             speaker_reset_probability=0.0,
             context_max_gate=0.25,
-            audio_max_gate=0.15,
+            audio_max_gate=1.0,
             initial_gate_bias=-2.0,
+            direct_audio_mix=True,
+            disagreement_gate=True,
         )
 
     def test_uniform_frame_sampling_caps_length_and_keeps_endpoints(self):
@@ -78,7 +80,7 @@ class FrameAttentionTests(unittest.TestCase):
         self.assertEqual(weights.shape, (1, 1, 2, 2))
         self.assertTrue(torch.allclose(weights.sum(dim=-1), torch.ones(1, 1, 2)))
 
-    def test_audio_gate_is_class_specific(self):
+    def test_audio_gate_is_scalar(self):
         model = frame_attention.FrameAttentionRecurrentModel(
             text_dimension=7,
             frame_dimension=3,
@@ -87,9 +89,9 @@ class FrameAttentionTests(unittest.TestCase):
             args=self.model_args(),
         )
 
-        gate = model.audio_gate(torch.zeros(2, 10))
+        gate = model.audio_gate(torch.zeros(2, 30))
 
-        self.assertEqual(gate.shape, (2, 7))
+        self.assertEqual(gate.shape, (2, 1))
 
     def test_audio_warmup_parameters_exclude_recurrent_state(self):
         model = frame_attention.FrameAttentionRecurrentModel(

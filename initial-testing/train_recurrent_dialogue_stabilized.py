@@ -38,6 +38,11 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
 
     def __init__(self, text_dimension, audio_dimension, number_of_classes, args):
         super().__init__(text_dimension, audio_dimension, number_of_classes, args)
+        self.direct_audio_mix = getattr(args, "direct_audio_mix", False)
+        self.disagreement_gate = getattr(args, "disagreement_gate", False)
+        if self.direct_audio_mix:
+            self.text_log_temperature = torch.nn.Parameter(torch.zeros(()))
+            self.audio_log_temperature = torch.nn.Parameter(torch.zeros(()))
         self.context_hidden = torch.nn.Sequential(*list(self.context_hidden)[:-1])
         initialize_gru(self.dialogue_cell)
         initialize_gru(self.speaker_cell)
@@ -76,7 +81,7 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
 
         logits, audio_logits = [], []
         context_gates, audio_gates = [], []
-        context_corrections, audio_corrections = [], []
+        context_corrections, audio_corrections, audio_influences = [], [], []
         for turn in range(turns):
             valid = batch["valid_mask"][:, turn]
             if reset_each_turn:
@@ -132,18 +137,89 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
             )
 
             base_logits = batch["text_logits"][:, turn]
-            probabilities = torch.softmax(base_logits.detach(), dim=-1)
+            if self.direct_audio_mix:
+                text_temperature = self.text_log_temperature.clamp(
+                    min=-1.3863, max=1.3863
+                ).exp()
+                audio_temperature = self.audio_log_temperature.clamp(
+                    min=-1.3863, max=1.3863
+                ).exp()
+            else:
+                text_temperature = audio_temperature = 1.0
+            probabilities = torch.softmax(
+                base_logits.detach() / text_temperature, dim=-1
+            )
             confidence = probabilities.max(dim=-1, keepdim=True).values
             entropy = -(probabilities * probabilities.clamp_min(1e-8).log()).sum(
                 dim=-1, keepdim=True
             ) / math.log(self.number_of_classes)
             audio_prediction = self.audio_classifier(audio[:, turn])
             history = speaker_view.norm(dim=-1, keepdim=True)
-            gate_input = torch.cat(
+            context_gate_input = torch.cat(
                 (audio_prediction, confidence, entropy, history), dim=-1
             )
+            if self.disagreement_gate:
+                text_probabilities = probabilities.detach()
+                audio_probabilities = torch.softmax(
+                    audio_prediction.detach() / audio_temperature, dim=-1
+                )
+                audio_confidence = audio_probabilities.max(
+                    dim=-1, keepdim=True
+                ).values
+                audio_entropy = -(
+                    audio_probabilities
+                    * audio_probabilities.clamp_min(1e-8).log()
+                ).sum(dim=-1, keepdim=True) / math.log(self.number_of_classes)
+                disagrees = text_probabilities.argmax(dim=-1).ne(
+                    audio_probabilities.argmax(dim=-1)
+                ).to(text.dtype).unsqueeze(1)
+                midpoint = 0.5 * (text_probabilities + audio_probabilities)
+                divergence = 0.5 * (
+                    (
+                        text_probabilities
+                        * (
+                            text_probabilities.clamp_min(1e-8).log()
+                            - midpoint.clamp_min(1e-8).log()
+                        )
+                    ).sum(dim=-1, keepdim=True)
+                    + (
+                        audio_probabilities
+                        * (
+                            audio_probabilities.clamp_min(1e-8).log()
+                            - midpoint.clamp_min(1e-8).log()
+                        )
+                    ).sum(dim=-1, keepdim=True)
+                ) / math.log(2.0)
+                acoustic_strength = audio_input[:, turn].norm(
+                    dim=-1, keepdim=True
+                ) / math.sqrt(audio_input.shape[-1])
+                if "frame_mask" in batch:
+                    frame_fraction = batch["frame_mask"][:, turn].sum(
+                        dim=-1, keepdim=True
+                    ).to(text.dtype) / 300.0
+                else:
+                    frame_fraction = torch.zeros_like(history)
+                gate_input = torch.cat(
+                    (
+                        text_probabilities,
+                        audio_probabilities,
+                        audio_probabilities - text_probabilities,
+                        confidence,
+                        audio_confidence,
+                        entropy,
+                        audio_entropy,
+                        disagrees,
+                        divergence,
+                        history,
+                        acoustic_strength,
+                        frame_fraction,
+                    ),
+                    dim=-1,
+                )
+            else:
+                gate_input = context_gate_input
             context_gate = self.context_max_gate * torch.sigmoid(
-                self.context_gate(gate_input)
+                self.context_gate(context_gate_input)
             )
             audio_gate = self.audio_max_gate * torch.sigmoid(
                 self.audio_gate(gate_input)
@@ -151,16 +227,33 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
             if zero_audio:
                 audio_gate = torch.zeros_like(audio_gate)
             audio_correction = self.audio_correction(audio[:, turn])
-            logits.append(
-                base_logits
-                + context_gate * context_correction
-                + audio_gate * audio_correction
-            )
+            if self.direct_audio_mix:
+                text_evidence = torch.log_softmax(
+                    base_logits / text_temperature, dim=-1
+                )
+                audio_evidence = torch.log_softmax(
+                    audio_prediction / audio_temperature, dim=-1
+                )
+                audio_influence = audio_gate * (audio_evidence - text_evidence)
+                fused_logits = (
+                    text_evidence
+                    + audio_influence
+                    + context_gate * context_correction
+                )
+            else:
+                audio_influence = audio_gate * audio_correction
+                fused_logits = (
+                    base_logits
+                    + context_gate * context_correction
+                    + audio_influence
+                )
+            logits.append(fused_logits)
             audio_logits.append(audio_prediction)
             context_gates.append(context_gate)
             audio_gates.append(audio_gate)
             context_corrections.append(context_correction)
             audio_corrections.append(audio_correction)
+            audio_influences.append(audio_influence)
 
             current = torch.cat((current_text, audio[:, turn]), dim=-1)
             new_dialogue = self.dialogue_cell(
@@ -187,6 +280,7 @@ class StabilizedRecurrentDialogueModel(base.RecurrentDialogueModel):
             "audio_gate": stack(audio_gates),
             "context_correction": stack(context_corrections),
             "audio_correction": stack(audio_corrections),
+            "audio_influence": stack(audio_influences),
         }
 
 
@@ -199,6 +293,32 @@ def state_ranking_loss(matched_logits, reset_logits, labels, mask, margin):
         1, targets
     )
     return torch.relu(margin - matched_support + reset_support).mean()
+
+
+def disagreement_gate_loss(output, batch):
+    mask = batch["valid_mask"]
+    labels = batch["labels"][mask]
+    text_correct = output["text_logits"][mask].argmax(dim=-1).eq(labels)
+    audio_correct = output["audio_logits"][mask].argmax(dim=-1).eq(labels)
+    gate = output["audio_gate"][mask].squeeze(-1)
+    audio_wins = audio_correct & ~text_correct
+    text_wins = text_correct & ~audio_correct
+    losses = []
+    if audio_wins.any():
+        losses.append(
+            torch.nn.functional.binary_cross_entropy(
+                gate[audio_wins], torch.ones_like(gate[audio_wins])
+            )
+        )
+    if text_wins.any():
+        losses.append(
+            torch.nn.functional.binary_cross_entropy(
+                gate[text_wins], torch.zeros_like(gate[text_wins])
+            )
+        )
+    if not losses:
+        return gate.sum() * 0.0
+    return torch.stack(losses).mean()
 
 
 def checkpoint_score(matched, baseline, state_margin, minimum_state_margin):
@@ -256,6 +376,12 @@ def calculate_loss(matched, clean, reset, shuffled, batch, class_weights, args):
     )
     total = total + args.state_counterfactual_weight * state_ranking
     components["state_counterfactual"] = float(state_ranking.detach().cpu())
+    if getattr(args, "disagreement_gate", False):
+        gate_supervision = disagreement_gate_loss(matched, batch)
+        total = total + args.disagreement_gate_weight * gate_supervision
+        components["disagreement_gate"] = float(
+            gate_supervision.detach().cpu()
+        )
     components["total"] = float(total.detach().cpu())
     return total, components
 
