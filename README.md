@@ -27,8 +27,6 @@ basic punctuation.
 Build `third_party/llama.cpp` so `build-clang/bin/llama-server` exists, then run:
 
 ```bash
-git lfs install
-git lfs pull
 ./run_app.sh
 ```
 
