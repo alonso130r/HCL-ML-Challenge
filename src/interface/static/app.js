@@ -1,6 +1,3 @@
-const cameraCard = document.querySelector("#camera-card");
-const cameraPreview = document.querySelector("#camera-preview");
-const cameraToggle = document.querySelector("#camera-toggle");
 const recordButton = document.querySelector("#record-button");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
@@ -11,11 +8,23 @@ const emotionReadout = document.querySelector("#emotion-readout");
 const emotionDiagnostic = document.querySelector("#emotion-diagnostic");
 const streamState = document.querySelector("#stream-state");
 
-let cameraStream = null;
 let recorder = null;
 let microphoneStream = null;
 let recordedAudio = null;
 let recordedChunks = [];
+
+function createAudioRecorder(stream) {
+  const formats = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  const supported = formats.find((format) => MediaRecorder.isTypeSupported(format));
+  return supported
+    ? new MediaRecorder(stream, { mimeType: supported })
+    : new MediaRecorder(stream);
+}
 
 function setStatus(text, isError = false) {
   statusText.textContent = text;
@@ -46,25 +55,6 @@ function addMessage(role, text = "") {
   return body;
 }
 
-cameraToggle.addEventListener("click", async () => {
-  if (cameraStream) {
-    cameraStream.getTracks().forEach((track) => track.stop());
-    cameraStream = null;
-    cameraPreview.srcObject = null;
-    cameraCard.classList.remove("active");
-    cameraToggle.textContent = "Enable camera";
-    return;
-  }
-  try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
-    cameraPreview.srcObject = cameraStream;
-    cameraCard.classList.add("active");
-    cameraToggle.textContent = "Disable camera";
-  } catch (_error) {
-    setStatus("Camera permission was not granted", true);
-  }
-});
-
 recordButton.addEventListener("click", async () => {
   if (recorder?.state === "recording") {
     recorder.stop();
@@ -76,27 +66,49 @@ recordButton.addEventListener("click", async () => {
   }
   try {
     microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    recorder = new MediaRecorder(microphoneStream);
+    recorder = createAudioRecorder(microphoneStream);
     recordedChunks = [];
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data.size) recordedChunks.push(event.data);
     });
-    recorder.addEventListener("stop", () => {
+    recorder.addEventListener("stop", async () => {
       recordedAudio = new Blob(recordedChunks, { type: recorder.mimeType });
       microphoneStream.getTracks().forEach((track) => track.stop());
       recorder = null;
       microphoneStream = null;
-      setStatus("Audio ready · enter the matching transcript");
+      await transcribeAudio(recordedAudio);
     });
     recorder.start();
     recordButton.classList.add("recording");
     recordButton.setAttribute("aria-pressed", "true");
     recordButton.setAttribute("aria-label", "Stop recording");
     setStatus("Recording… press again to stop");
-  } catch (_error) {
-    setStatus("Microphone permission was not granted", true);
+  } catch (error) {
+    microphoneStream?.getTracks().forEach((track) => track.stop());
+    microphoneStream = null;
+    setStatus(error.message || "Audio recording could not start", true);
   }
 });
+
+async function transcribeAudio(blob) {
+  setStatus("Transcribing locally…");
+  try {
+    const audio = await encodeAudio(blob);
+    const response = await fetch("/api/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Transcription failed.");
+    if (result.text) input.value = result.text;
+    resizeInput();
+    setStatus(result.text ? "Transcript ready · edit or send" : "No speech detected · type a message");
+    input.focus();
+  } catch (error) {
+    setStatus(error.message || "Transcription failed", true);
+  }
+}
 
 async function encodeAudio(blob) {
   if (!blob) return null;

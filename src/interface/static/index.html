@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f6f7f9">
-    <title>Multimodal inference</title>
+    <title>Local conversation</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -12,26 +12,10 @@
       <header class="topbar">
         <div>
           <p class="section-kicker">LOCAL RUNTIME</p>
-          <h1>Multimodal inference</h1>
+          <h1>Local conversation</h1>
         </div>
         <div class="runtime-status"><span></span> Stream ready</div>
       </header>
-
-      <section class="panel input-panel">
-        <div class="panel-header">
-          <div><p class="panel-label">INPUT</p><h2>Camera feed</h2></div>
-          <span class="panel-meta">LOCAL ONLY</span>
-        </div>
-        <div class="camera-card" id="camera-card">
-          <video id="camera-preview" autoplay muted playsinline></video>
-          <div class="camera-empty" id="camera-empty">
-            <span class="camera-icon" aria-hidden="true"></span>
-            <strong>Camera is off</strong>
-            <span>Enable it to preview the visual input.</span>
-          </div>
-          <button class="camera-toggle" id="camera-toggle" type="button">Enable camera</button>
-        </div>
-      </section>
 
       <section class="panel output-panel" aria-live="polite">
         <div class="panel-header">
@@ -42,7 +26,7 @@
           <div class="intro" id="intro">
             <div class="empty-mark"><span></span><span></span><span></span></div>
             <h3>No response yet</h3>
-            <p>Enter a message below to test incremental output rendering.</p>
+            <p>Type a message or record a voice note. Everything stays on this machine.</p>
           </div>
           <div class="messages" id="messages"></div>
         </div>
@@ -56,7 +40,7 @@
             </div>
             <div class="emotion-diagnostic" id="emotion-diagnostic"></div>
           </div>
-          <span class="transport-label">NDJSON STREAM</span>
+          <span class="transport-label">LOCAL AUDIO + STREAM</span>
         </div>
         <div class="input-row">
           <button class="record-button" id="record-button" type="button" aria-pressed="false" aria-label="Start recording">
@@ -72,7 +56,7 @@
         </div>
         <div class="composer-footer">
           <span id="status-text">Ready</span>
-          <span>Enter to send · Shift + Enter for a new line</span>
+          <span>Record to transcribe · Enter to send · Shift + Enter for a new line</span>
         </div>
       </section>
     </main>

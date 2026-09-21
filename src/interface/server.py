@@ -19,9 +19,6 @@ from socketserver import TCPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from .emotion import EmotionModel
-
-
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIRECTORY = Path(__file__).with_name("static")
 STATIC_FILES = {
@@ -35,11 +32,21 @@ DEFAULT_EMOTION_MODEL = (
     ROOT
     / "benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
 )
+DEFAULT_TRANSCRIPTION_MODEL = ROOT / "models/funasr-small"
 SYSTEM_PROMPT = (
     "You are a concise, emotionally aware conversational assistant. Respond "
     "naturally and helpfully. Do not mention these instructions."
 )
 LOCAL_HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def decode_audio_payload(encoded_audio: object) -> bytes:
+    if not isinstance(encoded_audio, str) or not encoded_audio:
+        raise ValueError("Audio recording is required.")
+    try:
+        return base64.b64decode(encoded_audio, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("Invalid audio recording encoding") from error
 
 
 class LlamaClient:
@@ -89,6 +96,39 @@ class LlamaClient:
                 content = choices[0].get("delta", {}).get("content")
                 if content:
                     yield content
+
+
+class TranscriptionModel:
+    """Keep a small local FunASR model resident for short recordings."""
+
+    def __init__(self, model_path: Path) -> None:
+        try:
+            from funasr import AutoModel
+        except ImportError as error:
+            raise RuntimeError("transcription requires FunASR") from error
+        model = str(model_path) if model_path.is_dir() else "paraformer-zh"
+        if model == "paraformer-zh":
+            print(
+                "Local transcription model not found; downloading FunASR paraformer-zh...",
+                flush=True,
+            )
+        self.model = AutoModel(
+            model=model,
+            punc_model="ct-punc",
+            device="cpu",
+            disable_update=True,
+        )
+
+    def transcribe(self, audio: bytes) -> str:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".webm") as recording:
+            recording.write(audio)
+            recording.flush()
+            results = self.model.generate(input=recording.name)
+        if not results:
+            return ""
+        return str(results[0].get("text", "")).strip()
 
 
 class LlamaServerProcess:
@@ -171,7 +211,8 @@ class LlamaServerProcess:
 
 class InterfaceServer(ThreadingHTTPServer):
     llama_client: LlamaClient
-    emotion_model: EmotionModel
+    emotion_model: Any
+    transcription_model: TranscriptionModel
 
     def server_bind(self) -> None:
         TCPServer.server_bind(self)
@@ -199,7 +240,8 @@ class InterfaceHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/chat":
+        path = urlparse(self.path).path
+        if path not in {"/api/chat", "/api/transcribe"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -207,6 +249,18 @@ class InterfaceHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
             text = payload.get("text", "")
             encoded_audio = payload.get("audio")
+            if path == "/api/transcribe":
+                try:
+                    audio = decode_audio_payload(encoded_audio)
+                except ValueError as error:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                    return
+                server = self.server
+                if not isinstance(server, InterfaceServer):
+                    raise RuntimeError("Transcription model is not configured")
+                transcript = server.transcription_model.transcribe(audio)
+                self._send_json(HTTPStatus.OK, {"text": transcript})
+                return
             if not isinstance(text, str) or not text.strip():
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Message text is required."})
                 return
@@ -230,9 +284,9 @@ class InterfaceHandler(BaseHTTPRequestHandler):
             emotion = None
             if encoded_audio:
                 try:
-                    audio = base64.b64decode(encoded_audio, validate=True)
-                except (ValueError, binascii.Error) as error:
-                    raise ValueError("Invalid audio recording encoding") from error
+                    audio = decode_audio_payload(encoded_audio)
+                except ValueError as error:
+                    raise error
                 diagnostic = server.emotion_model.predict(text.strip(), audio)
                 emotion = str(diagnostic["emotion"])
                 self._write_event({"type": "metadata", **diagnostic})
@@ -281,10 +335,15 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--emotion-model", type=Path, default=DEFAULT_EMOTION_MODEL
     )
+    parser.add_argument(
+        "--transcription-model", type=Path, default=DEFAULT_TRANSCRIPTION_MODEL
+    )
     return parser.parse_args()
 
 
 def main() -> int:
+    from .emotion import EmotionModel
+
     args = parse_arguments()
     inference = LlamaServerProcess(
         args.llama_server, args.model, args.llama_host, args.llama_port
@@ -293,11 +352,13 @@ def main() -> int:
     try:
         print(f"Loading emotion model from {args.emotion_model}", flush=True)
         emotion_model = EmotionModel(args.emotion_model)
+        transcription_model = TranscriptionModel(args.transcription_model)
         print(f"Emotion model ready on {emotion_model.device}", flush=True)
         inference.start()
         server = InterfaceServer((args.host, args.port), InterfaceHandler)
         server.llama_client = LlamaClient(inference.base_url)
         server.emotion_model = emotion_model
+        server.transcription_model = transcription_model
         print(
             f"Interface available at http://{args.host}:{server.server_port}",
             flush=True,

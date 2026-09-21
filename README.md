@@ -9,6 +9,19 @@ philosophy that a simpler, more useful product is better than a complex,
 half-working product also points towards audio as extracting emotion from
 video is a lot more complex than audio and more likely to be less effective.
 
+The interface records audio in the browser, transcribes it locally with a
+small FunASR model, and places the transcript in the composer for editing
+before sending. The original audio is retained for local emotion analysis.
+
+## Local transcription model
+
+Place a small FunASR-compatible model in `models/funasr-small`, or pass a
+different directory with `--transcription-model`. If that directory does not
+exist, startup automatically downloads and caches FunASR's `paraformer-zh`
+model. No browser speech service is used.
+The `ct-punc` FunASR model is also loaded automatically so transcripts include
+basic punctuation.
+
 ### My definition of "real-time"
 
 A system like this is useless unless the client can hold an actual conversation
