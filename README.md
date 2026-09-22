@@ -46,6 +46,32 @@ The transcript is editable before it reaches the text branch, while the audio
 branch always analyzes the original recording. This keeps speech-recognition
 correction separate from acoustic-affect analysis.
 
+#### Research framing before implementation
+
+Before building the system, I reviewed recent MELD work to understand where
+meaningful gains were coming from. The common pattern was not a slightly larger
+fusion head. Stronger systems relied on better supervision and representation
+learning, including contrastive objectives, pseudo-labels, knowledge
+distillation, explicit context or emotion-cause structure, and sometimes
+active-speaker processing. Examples include
+[CEPT](https://aclanthology.org/2024.lrec-main.263/),
+[DCLF](https://aclanthology.org/2025.coling-main.272/),
+[ECERC](https://aclanthology.org/2025.acl-long.102/), and
+[Xiao et al.](https://aclanthology.org/2026.findings-eacl.212/).
+
+In other words, adding audio or video to an already strong text model was not
+enough by itself to produce the larger reported gains. Those gains appeared
+when multimodal inputs were paired with additional supervision or structure.
+This project therefore treats a small, demonstrably useful audio contribution
+as a more defensible goal than assuming fusion alone will close the gap.
+
+That led to three decisions before modeling: use contextual text as the
+reliable anchor, treat audio as an additional signal that must prove its value,
+and avoid a video pipeline whose cost could not be justified by the available
+time or local-inference budget. The evaluation therefore emphasizes
+counterfactual audio and context controls, rather than reporting headline F1
+alone.
+
 #### Full-frame dual audio attention
 
 The model retains all valid `emotion2vec` frames, rather than collapsing audio
