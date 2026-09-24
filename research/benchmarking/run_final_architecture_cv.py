@@ -18,8 +18,8 @@ import numpy as np
 import torch
 
 
-ROOT = Path(__file__).resolve().parents[1]
-INITIAL_TESTING = ROOT / "initial-testing"
+ROOT = Path(__file__).resolve().parents[2]
+INITIAL_TESTING = ROOT / "research/experiments"
 sys.path.insert(0, str(INITIAL_TESTING))
 
 import train_recurrent_dialogue as recurrent  # noqa: E402
@@ -798,8 +798,8 @@ def write_fold_file(assignments, path):
 def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=ROOT / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--audio-cache-dir", type=Path, default=ROOT / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "benchmarking/results/final-architecture-cv")
+    parser.add_argument("--audio-cache-dir", type=Path, default=ROOT / "research/experiments/audio-cache")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "research/benchmarking/results/final-architecture-cv")
     parser.add_argument("--text-model", default="bert-base-uncased")
     parser.add_argument("--outer-folds", type=int, default=5)
     parser.add_argument("--only-folds", type=int, nargs="+")

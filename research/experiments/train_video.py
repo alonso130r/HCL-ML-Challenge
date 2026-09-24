@@ -312,11 +312,11 @@ def write_predictions(path, records, predicted, confidences, indices):
 
 
 def parse_arguments():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--video-cache-dir", type=Path, default=root / "initial-testing/video-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-video")
+    parser.add_argument("--video-cache-dir", type=Path, default=root / "research/experiments/video-cache")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/training-output-video")
     parser.add_argument("--frames-per-clip", type=int, default=12)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=64)

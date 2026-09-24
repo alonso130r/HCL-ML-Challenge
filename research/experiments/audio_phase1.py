@@ -314,11 +314,11 @@ def train_probe(name, train, dev, test, labels, args, device, output_dir):
 
 
 def parse_arguments():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-audio-phase1")
+    parser.add_argument("--audio-cache-dir", type=Path, default=root / "research/experiments/audio-cache")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/training-output-audio-phase1")
     parser.add_argument("--emotion-model", default=EMOTION_MODEL)
     parser.add_argument("--extract-device", default="cpu", choices=("cpu", "mps", "cuda"))
     parser.add_argument("--epochs", type=int, default=20)

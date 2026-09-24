@@ -252,13 +252,13 @@ def predict(row: dict[str, str], components) -> tuple[str, float]:
 
 
 def parse_arguments() -> argparse.Namespace:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
     parser.add_argument("--model-dir", type=Path, default=root / "models/meld-early-fusion-temporal")
-    parser.add_argument("--output", type=Path, default=root / "initial-testing/results/predictions.csv")
+    parser.add_argument("--output", type=Path, default=root / "research/experiments/results/predictions.csv")
     return parser.parse_args()
 
 

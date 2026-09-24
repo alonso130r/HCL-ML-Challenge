@@ -2,8 +2,8 @@
 """Quick, zero-shot MELD comparison against saved seed-43 baseline predictions.
 
 Run from the repository root:
-  .venv/bin/python initial-testing/compare_qwen.py --sample-size 100
-  .venv/bin/python initial-testing/compare_qwen.py --dry-run
+  .venv/bin/python research/experiments/compare_qwen.py --sample-size 100
+  .venv/bin/python research/experiments/compare_qwen.py --dry-run
 
 Requires the existing requirements.txt and transformers>=5.2,<6. Downloads
 Qwen weights on first use. Models run sequentially to limit memory consumption.
@@ -29,8 +29,8 @@ from pathlib import Path
 
 from evaluate_meld import EMOTION_LABELS, compute_metrics, decode_audio, seeded_sample, select_device
 
-ROOT = Path(__file__).resolve().parents[1]
-BASELINE = ROOT / "initial-testing/training-output-recurrent-dialogue-stabilized-c2-five/run-02-seed-43/test_predictions.csv"
+ROOT = Path(__file__).resolve().parents[2]
+BASELINE = ROOT / "research/experiments/training-output-recurrent-dialogue-stabilized-c2-five/run-02-seed-43/test_predictions.csv"
 MODELS = {"omni": "Qwen/Qwen2.5-Omni-3B", "vision": "Qwen/Qwen3.5-2B", "text": "Qwen/Qwen3.5-2B"}
 
 
@@ -268,7 +268,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--baseline-predictions", type=Path, default=BASELINE)
     parser.add_argument("--raw-archive", type=Path, default=ROOT / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "initial-testing/results-qwen-text-comparison")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "research/experiments/results-qwen-text-comparison")
     parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--context-window", type=int, default=2)

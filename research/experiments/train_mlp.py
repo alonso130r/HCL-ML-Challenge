@@ -173,10 +173,10 @@ def serializable_metrics(metrics):
 
 
 def parse_arguments() -> argparse.Namespace:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cache-dir", type=Path, default=root / "initial-testing/cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-context")
+    parser.add_argument("--cache-dir", type=Path, default=root / "research/experiments/cache")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/training-output-context")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-4)

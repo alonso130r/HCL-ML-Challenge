@@ -128,7 +128,7 @@ score, but selecting it would have leaked test-set information.
 
 These five-seed results describe the stabilized context-two research model. The
 interactive demo loads the fixed-epoch frame-attention checkpoint at
-`benchmarking/results/final-frame-attention-light/best-model/`; it is an
+`models/frame-attention/`; it is an
 interactive prototype, not a final validated deployment checkpoint.
 
 ### Interpreting the metrics
@@ -197,7 +197,7 @@ Audio recording, transcription, emotion inference, and language-model generation
 
 ## Reproducibility
 
-The interactive demo downloads its required public model assets on its first run and retrieves the fine-tuned demo weights with Git LFS. Reproducing model training requires the MELD archives, which are not tracked in Git. The training and benchmarking scripts are retained under `initial-testing/` and `benchmarking/`.
+The interactive demo downloads its required public model assets on its first run and retrieves the fine-tuned demo weights with Git LFS. Reproducing model training requires the MELD archives, which are not tracked in Git. The training and benchmarking scripts are retained under `research/experiments/` and `research/benchmarking/`.
 
 ### Reproducing the experiments
 
@@ -205,15 +205,15 @@ The MELD raw archive must be available at `data/MELD/MELD.Raw.tar.gz`. The scrip
 
 | Goal | Script | Result or purpose |
 | --- | --- | --- |
-| Train the contextual text baseline | `initial-testing/train_text.py` | Fine-tunes the BERT text classifier and writes `initial-testing/training-output-text/`. |
-| Reproduce the five-seed context-two study | `initial-testing/train_recurrent_dialogue_stabilized.py --context-window 2 --runs 5` | Produces the repeated-seed text-audio recurrent evaluation reported above. |
-| Run leakage-safe architecture evaluation | `benchmarking/run_final_architecture_cv.py --retrain` | Retrains text models inside dialogue-level outer folds and reports out-of-fold metrics. |
+| Train the contextual text baseline | `research/experiments/train_text.py` | Fine-tunes the BERT text classifier and writes to `research/experiments/training-output-text/`. |
+| Reproduce the five-seed context-two study | `research/experiments/train_recurrent_dialogue_stabilized.py --context-window 2 --runs 5` | Produces the repeated-seed text-audio recurrent evaluation reported above. |
+| Run leakage-safe architecture evaluation | `research/benchmarking/run_final_architecture_cv.py --retrain` | Retrains text models inside dialogue-level outer folds and reports out-of-fold metrics. |
 
 The interactive submission is reproduced with `./run_app.sh`. Advanced
 frame-attention and distillation experiments are in
-`initial-testing/train_recurrent_dialogue_frame_attention.py`,
-`benchmarking/run_final_frame_attention.py`, and
-`benchmarking/distill_frame_attention_ensemble.py`.
+`research/experiments/train_recurrent_dialogue_frame_attention.py`,
+`research/benchmarking/run_final_frame_attention.py`, and
+`research/benchmarking/distill_frame_attention_ensemble.py`.
 
 ## Limitations
 

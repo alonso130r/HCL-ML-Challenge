@@ -408,16 +408,16 @@ def warm_up_disagreement_gate(model, train_loader, args, device):
 
 
 def parse_arguments(argv=None):
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--text-model", type=Path, default=root / "initial-testing/training-output-text/best-model")
-    parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
+    parser.add_argument("--text-model", type=Path, default=root / "models/text-emotion")
+    parser.add_argument("--audio-cache-dir", type=Path, default=root / "research/experiments/audio-cache")
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=root
-        / "initial-testing/training-output-recurrent-dialogue-frame-attention-staged",
+        / "research/experiments/training-output-recurrent-dialogue-frame-attention-staged",
     )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=5)

@@ -20,9 +20,9 @@ import numpy as np
 import torch
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BENCHMARKING = Path(__file__).resolve().parent
-INITIAL_TESTING = ROOT / "initial-testing"
+INITIAL_TESTING = ROOT / "research/experiments"
 sys.path.insert(0, str(BENCHMARKING))
 sys.path.insert(0, str(INITIAL_TESTING))
 
@@ -170,17 +170,17 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--text-model",
         type=Path,
-        default=ROOT / "initial-testing/training-output-text/best-model",
+        default=ROOT / "models/text-emotion",
     )
     parser.add_argument(
         "--audio-cache-dir",
         type=Path,
-        default=ROOT / "initial-testing/audio-cache",
+        default=ROOT / "research/experiments/audio-cache",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "benchmarking/results/frame-attention-distillation-oof-light",
+        default=ROOT / "research/benchmarking/results/frame-attention-distillation-oof-light",
     )
     parser.add_argument("--seed", type=int, default=45)
     parser.add_argument("--fold-seed", type=int, default=20260920)

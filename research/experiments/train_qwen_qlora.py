@@ -4,9 +4,9 @@
 Install in an Apple Silicon Python environment:
   uv pip install --python .venv/bin/python 'mlx-lm[train]==0.31.3'
 Run:
-  .venv/bin/python initial-testing/train_qwen_qlora.py
+  .venv/bin/python research/experiments/train_qwen_qlora.py
 Pilot:
-  .venv/bin/python initial-testing/train_qwen_qlora.py --iters 8 --limit-train 16 --limit-valid 4 --output-dir initial-testing/qwen-qlora-pilot
+  .venv/bin/python research/experiments/train_qwen_qlora.py --iters 8 --limit-train 16 --limit-valid 4 --output-dir research/experiments/qwen-qlora-pilot
 
 Writes train/valid JSONL, run metadata, training.log and adapters/. Converts the
 base once to models/qwen3.5-2b-mlx-8bit. No test split is read or used for tuning.
@@ -39,7 +39,7 @@ def parse_args(argv=None):
     parser.add_argument('--quantized-model', type=Path, default=ROOT / 'models/qwen3.5-2b-mlx-8bit')
     parser.add_argument('--raw-archive', type=Path, default=ROOT / 'data/MELD/MELD.Raw.tar.gz')
     parser.add_argument('--csv-dir', type=Path, help='Optional directory containing train_sent_emo.csv and dev_sent_emo.csv')
-    parser.add_argument('--output-dir', type=Path, default=ROOT / 'initial-testing/training-output-qwen-qlora-8bit')
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'research/experiments/training-output-qwen-qlora-8bit')
     parser.add_argument('--context-window', type=int, default=2)
     parser.add_argument('--iters', type=int, default=10000, help='MLX microbatch iterations; 10000 is roughly one MELD pass at batch size 1')
     parser.add_argument('--batch-size', type=int, default=1)

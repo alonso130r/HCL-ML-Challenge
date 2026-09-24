@@ -23,7 +23,7 @@ from evaluate_meld import EMOTION_LABELS, compute_metrics, select_device
 from train_text_audio_phase2 import attach_speaker_relative_acoustics, combine_records
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class CalibratedSvmHead:
@@ -187,19 +187,19 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--audio-cache-dir",
         type=Path,
-        default=ROOT / "initial-testing/audio-cache",
+        default=ROOT / "research/experiments/audio-cache",
     )
     parser.add_argument(
         "--baseline-run-dir",
         type=Path,
         default=ROOT
-        / "initial-testing/training-output-recurrent-dialogue-stabilized-c2-five"
+        / "research/experiments/training-output-recurrent-dialogue-stabilized-c2-five"
         / "run-02-seed-43",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "initial-testing/results-svm-text-head-comparison",
+        default=ROOT / "research/experiments/results-svm-text-head-comparison",
     )
     parser.add_argument("--context-window", type=int, default=2)
     parser.add_argument("--seed", type=int, default=43)

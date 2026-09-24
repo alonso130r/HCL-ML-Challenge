@@ -154,10 +154,10 @@ def write_predictions(path, examples, predicted, confidences, indices):
 
 
 def parse_arguments() -> argparse.Namespace:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-text")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/training-output-text")
     parser.add_argument("--model", default=MODEL_NAME)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=8)

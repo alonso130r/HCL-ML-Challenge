@@ -243,13 +243,13 @@ def train_epoch(model, loader, optimizer, class_weights, args, device):
 
 
 def parse_arguments(argv=None):
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--text-model", type=Path, default=root / "initial-testing/training-output-text/best-model")
-    parser.add_argument("--fusion-checkpoint", type=Path, default=root / "initial-testing/training-output-recurrent-dialogue-stabilized-c2-five/run-02-seed-43/best_recurrent_dialogue_stabilized.pt")
-    parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/training-output-joint-text-recurrent")
+    parser.add_argument("--text-model", type=Path, default=root / "models/text-emotion")
+    parser.add_argument("--fusion-checkpoint", type=Path, default=root / "research/experiments/training-output-recurrent-dialogue-stabilized-c2-five/run-02-seed-43/best_recurrent_dialogue_stabilized.pt")
+    parser.add_argument("--audio-cache-dir", type=Path, default=root / "research/experiments/audio-cache")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/training-output-joint-text-recurrent")
     parser.add_argument("--head-epochs", type=int, default=1)
     parser.add_argument("--finetune-epochs", type=int, default=3)
     parser.add_argument("--finetune-text-layers", type=int, default=2)

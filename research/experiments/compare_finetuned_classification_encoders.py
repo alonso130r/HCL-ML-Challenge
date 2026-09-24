@@ -22,7 +22,7 @@ from train_text import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODEL_SPECS = {
     "bert": {"model_id": "bert-base-uncased", "batch_size": 8},
     "roberta_go_emotions": {
@@ -290,7 +290,7 @@ def parse_arguments(argv=None):
         "--output-dir",
         type=Path,
         default=ROOT
-        / "initial-testing/results-finetuned-classification-encoder-comparison",
+        / "research/experiments/results-finetuned-classification-encoder-comparison",
     )
     parser.add_argument(
         "--models",

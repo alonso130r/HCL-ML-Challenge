@@ -23,8 +23,8 @@ import numpy as np
 import torch
 
 
-ROOT = Path(__file__).resolve().parents[1]
-INITIAL_TESTING = ROOT / "initial-testing"
+ROOT = Path(__file__).resolve().parents[2]
+INITIAL_TESTING = ROOT / "research/experiments"
 sys.path.insert(0, str(INITIAL_TESTING))
 
 import train_recurrent_dialogue as recurrent  # noqa: E402
@@ -483,19 +483,19 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--audio-cache-dir",
         type=Path,
-        default=ROOT / "initial-testing/audio-cache",
+        default=ROOT / "research/experiments/audio-cache",
     )
     parser.add_argument(
         "--normalization-path",
         type=Path,
         default=ROOT
-        / "initial-testing/training-output-recurrent-dialogue-stabilized-c2-five"
+        / "research/experiments/training-output-recurrent-dialogue-stabilized-c2-five"
         / "emotion_normalization.npz",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "benchmarking/results/final-training",
+        default=ROOT / "research/benchmarking/results/final-training",
     )
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=3)

@@ -1,6 +1,10 @@
 # Datasets and downloaded model assets
 /data/
-/models/
+/models/*
+!/models/text-emotion/
+!/models/text-emotion/**
+!/models/frame-attention/
+!/models/frame-attention/**
 /wav2vec2_checkpoints/
 /.cache/
 /hf_cache/
@@ -11,29 +15,24 @@ venv/
 __pycache__/
 *.py[cod]
 
-# Generated evaluation, cache, and training artifacts
-/initial-testing/cache/
-/initial-testing/audio-cache/
-/initial-testing/video-cache/
-/initial-testing/results/
-/initial-testing/results-*/
-/initial-testing/training-output*/
-/initial-testing/checkpoints/
+# Generated research outputs and caches
+/research/experiments/cache/
+/research/experiments/audio-cache/
+/research/experiments/video-cache/
+/research/experiments/results/
+/research/experiments/results-*/
+/research/experiments/training-output*/
+/research/experiments/checkpoints/
+/research/benchmarking/results/
 *.npz
 *.pt
 *.pth
 *.ckpt
 *.safetensors
 
-# Publishable demo fine-tuned weights are explicitly re-included and tracked via Git LFS.
-!/initial-testing/training-output-text/
-/initial-testing/training-output-text/*
-!/initial-testing/training-output-text/best-model/
-!/initial-testing/training-output-text/best-model/**
-!/benchmarking/results/
-!/benchmarking/results/final-frame-attention-light/
-!/benchmarking/results/final-frame-attention-light/best-model/
-!/benchmarking/results/final-frame-attention-light/best-model/**
+# Keep only centralized model weights in Git LFS.
+!/models/text-emotion/**
+!/models/frame-attention/**
 
 # Experiment logs and temporary files
 /docs/

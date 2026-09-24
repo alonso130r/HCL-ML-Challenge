@@ -23,8 +23,8 @@ PIP_BIN="$VENV_DIR/bin/pip"
 LLAMA_DIR="$ROOT_DIR/third_party/llama.cpp"
 LLAMA_BIN="$LLAMA_DIR/build-clang/bin/llama-server"
 CHAT_MODEL="$ROOT_DIR/models/qwen3-1.7b-gguf/Qwen3-1.7B-Q8_0.gguf"
-TEXT_MODEL="$ROOT_DIR/initial-testing/training-output-text/best-model/model.safetensors"
-EMOTION_MODEL="$ROOT_DIR/benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
+TEXT_MODEL="$ROOT_DIR/models/text-emotion/model.safetensors"
+EMOTION_MODEL="$ROOT_DIR/models/frame-attention/best_frame_attention.pt"
 
 if command -v nvidia-smi >/dev/null 2>&1 && command -v nvcc >/dev/null 2>&1; then
   export HCL_DEVICE="cuda"
@@ -52,11 +52,11 @@ if grep -q "git-lfs.github.com/spec/v1" "$TEXT_MODEL" "$EMOTION_MODEL" 2>/dev/nu
     exit 1
   fi
   echo "Downloading Git LFS demo weights"
-  git lfs pull --include="initial-testing/training-output-text/best-model/**,benchmarking/results/final-frame-attention-light/best-model/**"
+  git lfs pull --include="models/text-emotion/**,models/frame-attention/**"
 fi
 
 echo "Installing Python dependencies"
-"$PIP_BIN" install -q -r initial-testing/requirements.txt
+"$PIP_BIN" install -q -r research/experiments/requirements.txt
 
 if [[ ! -f "$CHAT_MODEL" ]]; then
   echo "Downloading Qwen3 chat model"

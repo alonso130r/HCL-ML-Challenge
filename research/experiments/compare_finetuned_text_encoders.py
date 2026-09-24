@@ -18,7 +18,7 @@ from evaluate_meld import EMOTION_LABELS, compute_metrics, select_device
 from train_text import build_examples, sqrt_class_weights, write_predictions
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MODEL_SPECS = {
     "bert": {"model_id": "bert-base-uncased", "pooling": "pooler", "batch_size": 8},
     "e5": {"model_id": "intfloat/e5-large-v2", "pooling": "mean", "batch_size": 2},
@@ -347,7 +347,7 @@ def parse_arguments(argv=None):
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "initial-testing/results-finetuned-text-encoder-comparison",
+        default=ROOT / "research/experiments/results-finetuned-text-encoder-comparison",
     )
     parser.add_argument("--learning-rates", type=float, nargs="+", default=[1e-5, 2e-5])
     parser.add_argument("--epochs", type=int, default=5)

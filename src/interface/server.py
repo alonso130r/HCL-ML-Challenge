@@ -32,7 +32,7 @@ DEFAULT_LLAMA_SERVER = ROOT / "third_party/llama.cpp/build-clang/bin/llama-serve
 DEFAULT_MODEL = ROOT / "models/qwen3-1.7b-gguf/Qwen3-1.7B-Q8_0.gguf"
 DEFAULT_EMOTION_MODEL = (
     ROOT
-    / "benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
+    / "models/frame-attention/best_frame_attention.pt"
 )
 DEFAULT_TRANSCRIPTION_MODEL = ROOT / "models/funasr-small"
 SYSTEM_PROMPT = (

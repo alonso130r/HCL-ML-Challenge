@@ -253,10 +253,10 @@ def cache_split(
 
 
 def parse_arguments() -> argparse.Namespace:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--output-dir", type=Path, default=root / "initial-testing/cache")
+    parser.add_argument("--output-dir", type=Path, default=root / "research/experiments/cache")
     parser.add_argument("--splits", nargs="+", choices=("train", "dev", "test"), default=("train", "dev", "test"))
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-samples-per-split", type=int)

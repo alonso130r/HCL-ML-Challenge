@@ -411,7 +411,7 @@ def train_epoch(model, loader, optimizer, class_weights, args, device):
 
 
 def parse_arguments():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz"
@@ -419,15 +419,15 @@ def parse_arguments():
     parser.add_argument(
         "--text-model",
         type=Path,
-        default=root / "initial-testing/training-output-text/best-model",
+        default=root / "models/text-emotion",
     )
     parser.add_argument(
-        "--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache"
+        "--audio-cache-dir", type=Path, default=root / "research/experiments/audio-cache"
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=root / "initial-testing/training-output-recurrent-dialogue-stabilized",
+        default=root / "research/experiments/training-output-recurrent-dialogue-stabilized",
     )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--dialogue-batch-size", type=int, default=16)

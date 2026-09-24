@@ -284,14 +284,14 @@ def write_predictions(path, records, predicted, confidences, indices):
 
 
 def parse_arguments():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-archive", type=Path, default=root / "data/MELD/MELD.Raw.tar.gz")
-    parser.add_argument("--audio-cache-dir", type=Path, default=root / "initial-testing/audio-cache")
+    parser.add_argument("--audio-cache-dir", type=Path, default=root / "research/experiments/audio-cache")
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=root / "initial-testing/training-output-audio-wavlm",
+        default=root / "research/experiments/training-output-audio-wavlm",
     )
     parser.add_argument("--head-epochs", type=int, default=3)
     parser.add_argument("--finetune-epochs", type=int, default=4)

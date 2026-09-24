@@ -12,7 +12,7 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[2]
-INITIAL_TESTING = ROOT / "initial-testing"
+INITIAL_TESTING = ROOT / "research/experiments"
 if str(INITIAL_TESTING) not in sys.path:
     sys.path.insert(0, str(INITIAL_TESTING))
 
@@ -29,10 +29,10 @@ from train_recurrent_dialogue_frame_attention import (  # noqa: E402
 )
 
 
-TEXT_MODEL = ROOT / "initial-testing/training-output-text/best-model"
+TEXT_MODEL = ROOT / "models/text-emotion"
 CHECKPOINT = (
     ROOT
-    / "benchmarking/results/final-frame-attention-light/best-model/best_frame_attention.pt"
+    / "models/frame-attention/best_frame_attention.pt"
 )
 ACOUSTIC_NORMALIZATION_FILENAME = "speaker_acoustic_normalization.npz"
 
@@ -66,7 +66,7 @@ class EmotionModel:
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
         except ImportError as error:
             raise RuntimeError(
-                "emotion inference requires the packages in initial-testing/requirements.txt"
+                "emotion inference requires the packages in research/experiments/requirements.txt"
             ) from error
 
         checkpoint = checkpoint or CHECKPOINT
