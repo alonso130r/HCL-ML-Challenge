@@ -1,7 +1,7 @@
 import base64
 import unittest
 
-from src.interface.server import decode_audio_payload
+from src.inference.server import decode_audio_payload
 
 
 class FakeTranscriptionModel:

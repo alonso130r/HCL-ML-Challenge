@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from src.interface.server import InterfaceHandler, mock_chat_events
+from src.inference.server import InterfaceHandler, mock_chat_events
 
 
 class InterfaceServerTests(unittest.TestCase):

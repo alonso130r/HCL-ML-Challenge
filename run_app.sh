@@ -97,4 +97,4 @@ from huggingface_hub import snapshot_download
 snapshot_download("emotion2vec/emotion2vec_plus_base")
 PY
 
-exec "$PYTHON_BIN" -m src.interface "$@"
+exec "$PYTHON_BIN" -m src.inference "$@"
