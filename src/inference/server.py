@@ -145,11 +145,12 @@ class TranscriptionModel:
 class LlamaServerProcess:
     """Own a single persistent, Metal-accelerated llama.cpp server."""
 
-    def __init__(self, executable: Path, model: Path, host: str, port: int) -> None:
+    def __init__(self, executable: Path, model: Path, host: str, port: int, metrics: bool = False) -> None:
         self.executable = executable
         self.model = model
         self.host = host
         self.port = port or self._available_port(host)
+        self.metrics = metrics
         self.process: subprocess.Popen[bytes] | None = None
 
     @staticmethod
@@ -189,6 +190,8 @@ class LlamaServerProcess:
             "--threads-http",
             "1",
         ]
+        if self.metrics:
+            command.append("--metrics")
         self.process = subprocess.Popen(command, start_new_session=True)
         self._wait_until_ready()
 
@@ -350,6 +353,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--transcription-model", type=Path, default=DEFAULT_TRANSCRIPTION_MODEL
     )
+    parser.add_argument("--llama-metrics", action="store_true", help="enable llama.cpp /metrics endpoint")
     return parser.parse_args()
 
 
@@ -358,7 +362,7 @@ def main() -> int:
 
     args = parse_arguments()
     inference = LlamaServerProcess(
-        args.llama_server, args.model, args.llama_host, args.llama_port
+        args.llama_server, args.model, args.llama_host, args.llama_port, args.llama_metrics
     )
     server: InterfaceServer | None = None
     try:
